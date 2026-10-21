@@ -48,6 +48,19 @@ The pane shows a header like `3 open of 10`, then every item in order: open
 items bold, done items dim, dropped items struck through. The detail shows on
 a dim second line when the pane is at least 56 columns wide.
 
+A click on a row toggles it: an open item becomes done, a done or dropped
+item becomes open. Clicks reach the pane in the fullscreen terminal and in
+the desktop app.
+
+## The Claude session can use it too
+
+The plugin registers a `checklist` tool the model can call, so you can say
+"add that to the checklist" or "mark 3 done" in the chat, and Claude can
+tick items off as it finishes them. The tool takes an `action` (`list`,
+`add`, `done`, `open`, `drop`, `edit`, `remove`, `clear`) with `id`,
+`title` and `detail` as the action needs, and answers with the whole list.
+It writes the same per-project list the command and the pane use.
+
 ## Developing
 
 ```

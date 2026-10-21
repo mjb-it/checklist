@@ -17,12 +17,15 @@ const PANE = {
 } as const
 
 const START = { cwd: '/work/alpha', surface: 'terminal', isInteractive: true } as const
+const TOOL = 'mcp__checklist__checklist'
 
 /** The engine beneath the plugin: a store, a project, and the pane's answers. */
 function stubEngine(on: On, initial = '/work/alpha', saved?: Record<string, unknown>) {
   let project = initial
   mock.store(on, saved)
   on('command.register', () => ({ value: { command: 'checklist' } }))
+  on('tool.register', () => ({ value: { tool: TOOL } }))
+  on('tool.call', () => ({ deny: 'nothing beneath the plugin serves this tool' }))
   on('session.repo', () => ({ value: { root: project, remote: null, internal: false, name: null } }))
   on('session.root', () => ({ value: project }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
@@ -40,6 +43,7 @@ function stubEngine(on: On, initial = '/work/alpha', saved?: Record<string, unkn
 }
 
 const run = ($: any, args: string) => $.command.run({ command: 'checklist', args })
+const row = (ui: any, id: string) => ui.find({ type: 'Button', key: `item:${id}` })
 
 test('the pane shows the header, marks, and details when wide', async ($, on) => {
   stubEngine(on)
@@ -53,9 +57,9 @@ test('the pane shows the header, marks, and details when wide', async ($, on) =>
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
     expect((await ui.find({ type: 'Text', text: /open of/ }))?.text).toBe('1 open of 3')
-    expect((await ui.find({ type: 'Text', text: /Write the README/ }))?.text).toBe('[ ] 1. Write the README')
-    expect((await ui.find({ type: 'Text', text: /Ship it/ }))?.text).toBe('[x] 2. Ship it')
-    expect((await ui.find({ type: 'Text', text: /Weigh the cost/ }))?.text).toBe('[-] 3. Weigh the cost')
+    expect((await row(ui, '1'))?.text).toBe('[ ] 1. Write the README')
+    expect((await row(ui, '2'))?.text).toBe('[x] 2. Ship it')
+    expect((await row(ui, '3'))?.text).toBe('[-] 3. Weigh the cost')
     expect((await ui.find({ type: 'Text', text: /usage and install/ }))?.text).toContain('usage and install lines')
     await ui.unmount()
   }
@@ -63,8 +67,33 @@ test('the pane shows the header, marks, and details when wide', async ($, on) =>
   // Narrower than 56 columns, the detail line is left out.
   const narrow = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 40 }, surface: 'terminal' })
   expect(await narrow.find({ type: 'Text', text: /usage and install/ })).toBeUndefined()
-  expect((await narrow.find({ type: 'Text', text: /Write the README/ }))?.text).toBe('[ ] 1. Write the README')
+  expect((await row(narrow, '1'))?.text).toBe('[ ] 1. Write the README')
   await narrow.unmount()
+})
+
+test('a click on a row toggles it between open and done', async ($, on) => {
+  stubEngine(on)
+  await $.session.start(START)
+  await run($, 'add Click me')
+  await run($, 'add Dropped one')
+  await run($, 'drop 2')
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'item:1' })
+  expect((await row(ui, '1'))?.text).toBe('[x] 1. Click me')
+  await ui.press({ key: 'item:1' })
+  expect((await row(ui, '1'))?.text).toBe('[ ] 1. Click me')
+  // A dropped item comes back to open.
+  await ui.press({ key: 'item:2' })
+  expect((await row(ui, '2'))?.text).toBe('[ ] 2. Dropped one')
+  expect((await ui.find({ type: 'Text', text: /open of/ }))?.text).toBe('2 open of 2')
+  await ui.unmount()
+
+  // The click reached the store: a new session reads it back.
+  await $.session.start(START)
+  const again = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await again.find({ type: 'Text', text: /open of/ }))?.text).toBe('2 open of 2')
+  await again.unmount()
 })
 
 test('an empty project shows an empty pane and does not open it at start', async ($, on) => {
@@ -108,7 +137,7 @@ test('each command changes the list and reports what it did', async ($, on) => {
   expect((await run($, 'add Third thing')).text).toBe('Added 3. Third thing')
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await ui.find({ type: 'Text', text: /open of/ }))?.text).toBe('1 open of 2')
-  expect((await ui.find({ type: 'Text', text: /renamed/ }))?.text).toBe('[-] 2. Second thing, renamed')
+  expect((await row(ui, '2'))?.text).toBe('[-] 2. Second thing, renamed')
   await ui.unmount()
 
   expect((await run($, 'clear')).text).toBe('Cleared 2 items: 2. Second thing, renamed; 3. Third thing')
@@ -127,6 +156,39 @@ test('unknown input prints one line of usage', async ($, on) => {
   }
 })
 
+test('the model manages the list through the checklist tool', async ($, on) => {
+  const { opened } = stubEngine(on)
+  await $.session.start(START)
+
+  const added = await $.tool.call({ tool: TOOL, action: 'add', title: 'From the model', detail: 'agreed in chat' })
+  expect(added.result).toEqual({
+    text: 'Added 1. From the model\n[ ] 1. From the model -- agreed in chat',
+    items: [{ id: '1', title: 'From the model', status: 'open', detail: 'agreed in chat' }],
+  })
+  expect(opened).toEqual(['checklist'])
+
+  const done = await $.tool.call({ tool: TOOL, action: 'done', id: '1' })
+  expect((done.result as any).text).toContain('1. From the model is now done.')
+  expect((await $.tool.call({ tool: TOOL, action: 'edit', id: '1', title: 'Renamed' })).result).toMatchObject({
+    items: [{ id: '1', title: 'Renamed', status: 'done' }],
+  })
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toEqual({
+    text: '[x] 1. Renamed -- agreed in chat',
+    items: [{ id: '1', title: 'Renamed', status: 'done', detail: 'agreed in chat' }],
+  })
+
+  // What the person typed and what the model did share one list.
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await row(ui, '1'))?.text).toBe('[x] 1. Renamed')
+  await ui.unmount()
+  expect((await run($, 'remove 1')).text).toBe('Removed 1. Renamed')
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toEqual({ text: 'The checklist is empty.', items: [] })
+
+  // A bad call is refused with the reason.
+  expect((await $.tool.call({ tool: TOOL, action: 'done', id: '9' })).deny).toBe('No item 9.')
+  expect((await $.tool.call({ tool: TOOL, action: 'frobnicate' })).deny).toContain('Unknown action')
+})
+
 test('each project keeps its own list', async ($, on) => {
   const { setProject } = stubEngine(on, '/work/alpha')
   await $.session.start(START)
@@ -138,17 +200,18 @@ test('each project keeps its own list', async ($, on) => {
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await ui.find({ type: 'Text', text: /open of/ }))?.text).toBe('0 open of 0')
-  expect(await ui.find({ type: 'Text', text: /Alpha only/ })).toBeUndefined()
+  expect(await row(ui, '1')).toBeUndefined()
   await ui.unmount()
 
   expect((await run($, 'add Beta only')).text).toBe('Added 1. Beta only')
   expect((await run($, 'done 1')).text).toBe('1. Beta only is now done.')
+
   // Back in the first project, its list is untouched and beta's is unseen.
   setProject('/work/alpha')
   await $.session.start(START)
   const alpha = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await alpha.find({ type: 'Text', text: /open of/ }))?.text).toBe('1 open of 1')
-  expect((await alpha.find({ type: 'Text', text: /Alpha only/ }))?.text).toBe('[ ] 1. Alpha only')
+  expect((await row(alpha, '1'))?.text).toBe('[ ] 1. Alpha only')
   expect(await alpha.find({ type: 'Text', text: /Beta only/ })).toBeUndefined()
   await alpha.unmount()
   expect((await run($, 'add Alpha again')).text).toBe('Added 2. Alpha again')
@@ -170,7 +233,7 @@ test('a list saved by an earlier session is read back and opens the pane', async
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await ui.find({ type: 'Text', text: /open of/ }))?.text).toBe('1 open of 2')
-  expect((await ui.find({ type: 'Text', text: /Kept done/ }))?.text).toBe('[x] 3. Kept done')
+  expect((await row(ui, '3'))?.text).toBe('[x] 3. Kept done')
   expect((await ui.find({ type: 'Text', text: /from last time/ }))?.text).toContain('from last time')
   await ui.unmount()
 
