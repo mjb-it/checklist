@@ -1,12 +1,12 @@
 {
-  "name": "checklist",
+  "name": "punchlist",
   "owner": {
     "name": "mjb-it"
   },
-  "description": "A per-project checklist pane for Claude Code, managed with /checklist",
+  "description": "A per-project punchlist pane for Claude Code, managed with /punchlist",
   "plugins": [
     {
-      "name": "checklist",
+      "name": "punchlist",
       "source": "./"
     }
   ]

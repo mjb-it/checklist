@@ -3,11 +3,11 @@ import { expect, mock, test } from 'claude-code/testing'
 type On = Parameters<Parameters<typeof test>[1]>[1]
 
 const PANE = {
-  plugin: 'checklist',
+  plugin: 'punchlist',
   component: 'Pane',
-  requestId: 'checklist',
+  requestId: 'punchlist',
   props: {
-    title: 'Checklist',
+    title: 'Punchlist',
     isFocused: false,
     bodyColumns: 60,
     placement: 'dock',
@@ -17,13 +17,13 @@ const PANE = {
 } as const
 
 const START = { cwd: '/work/alpha', surface: 'terminal', isInteractive: true } as const
-const TOOL = 'mcp__checklist__checklist'
+const TOOL = 'mcp__punchlist__punchlist'
 
 /** The engine beneath the plugin: a store, a project, and the pane's answers. */
 function stubEngine(on: On, initial = '/work/alpha', saved?: Record<string, unknown>) {
   let project = initial
   mock.store(on, saved)
-  on('command.register', () => ({ value: { command: 'checklist' } }))
+  on('command.register', () => ({ value: { command: 'punchlist' } }))
   on('tool.register', () => ({ value: { tool: TOOL } }))
   on('tool.call', () => ({ deny: 'nothing beneath the plugin serves this tool' }))
   on('session.repo', () => ({ value: { root: project, remote: null, internal: false, name: null } }))
@@ -42,7 +42,7 @@ function stubEngine(on: On, initial = '/work/alpha', saved?: Record<string, unkn
   return { opened, closed, setProject: (root: string) => void (project = root) }
 }
 
-const run = ($: any, args: string) => $.command.run({ command: 'checklist', args })
+const run = ($: any, args: string) => $.command.run({ command: 'punchlist', args })
 const row = (ui: any, id: string) => ui.find({ type: 'Button', key: `item:${id}` })
 
 test('the pane shows the header, marks, and details when wide', async ($, on) => {
@@ -106,19 +106,19 @@ test('an empty project shows an empty pane and does not open it at start', async
   await ui.unmount()
 
   const ran = await run($, '')
-  expect(ran.text).toContain('Checklist pane opened')
-  expect(opened).toEqual(['checklist'])
+  expect(ran.text).toContain('Punchlist pane opened')
+  expect(opened).toEqual(['punchlist'])
 })
 
-test('/checklist close closes the pane', async ($, on) => {
+test('/punchlist close closes the pane', async ($, on) => {
   const { closed } = stubEngine(on)
   await $.session.start(START)
   await run($, '')
 
   const ran = await run($, 'close')
-  expect(ran.text).toBe('Checklist pane closed. /checklist reopens it.')
-  expect(closed).toEqual(['checklist'])
-  expect((await run($, 'close now')).text).toContain('/checklist [add <title>')
+  expect(ran.text).toBe('Punchlist pane closed. /punchlist reopens it.')
+  expect(closed).toEqual(['punchlist'])
+  expect((await run($, 'close now')).text).toContain('/punchlist [add <title>')
 })
 
 test('each command changes the list and reports what it did', async ($, on) => {
@@ -141,7 +141,7 @@ test('each command changes the list and reports what it did', async ($, on) => {
   await ui.unmount()
 
   expect((await run($, 'clear')).text).toBe('Cleared 2 items: 2. Second thing, renamed; 3. Third thing')
-  expect((await run($, 'clear')).text).toBe('The checklist was already empty.')
+  expect((await run($, 'clear')).text).toBe('The punchlist was already empty.')
 })
 
 test('unknown input prints one line of usage', async ($, on) => {
@@ -151,19 +151,19 @@ test('unknown input prints one line of usage', async ($, on) => {
 
   for (const bad of ['frobnicate', 'done', 'done 9', 'done 1 2', 'edit 1', 'remove', 'add', 'clear now']) {
     const ran = await run($, bad)
-    expect(ran.text).toContain('/checklist [add <title>')
+    expect(ran.text).toContain('/punchlist [add <title>')
     expect(ran.text.split('\n').length).toBe(1)
   }
 })
 
-test('the model manages the list through the checklist tool', async ($, on) => {
+test('the model manages the list through the punchlist tool', async ($, on) => {
   const { opened } = stubEngine(on)
   await $.session.start(START)
 
   const added = await $.tool.call({ tool: TOOL, action: 'add', title: 'From the model', detail: 'agreed in chat' })
   // A plugin tool answers the model with text.
   expect(added.result).toBe('Added 1. From the model\n[ ] 1. From the model -- agreed in chat')
-  expect(opened).toEqual(['checklist'])
+  expect(opened).toEqual(['punchlist'])
 
   const done = await $.tool.call({ tool: TOOL, action: 'done', id: '1' })
   expect(done.result).toBe('1. From the model is now done.\n[x] 1. From the model -- agreed in chat')
@@ -177,7 +177,7 @@ test('the model manages the list through the checklist tool', async ($, on) => {
   expect((await row(ui, '1'))?.text).toBe('[x] 1. Renamed')
   await ui.unmount()
   expect((await run($, 'remove 1')).text).toBe('Removed 1. Renamed')
-  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('The checklist is empty.')
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('The punchlist is empty.')
 
   // A bad call is refused with the reason.
   expect((await $.tool.call({ tool: TOOL, action: 'done', id: '9' })).deny).toBe('No item 9.')
@@ -224,7 +224,7 @@ test('a list saved by an earlier session is read back and opens the pane', async
   }
   const { opened } = stubEngine(on, '/work/alpha', saved)
   await $.session.start(START)
-  expect(opened).toEqual(['checklist'])
+  expect(opened).toEqual(['punchlist'])
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await ui.find({ type: 'Text', text: /open of/ }))?.text).toBe('1 open of 2')
