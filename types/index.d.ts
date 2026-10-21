@@ -7,7 +7,7 @@ export type Item = {
   status: Status
 }
 
-/** One project's punchlist, as the store keeps it under `project:<root>`. */
+/** One project's checklist, as the store keeps it under `project:<root>`. */
 export type Project = {
   /** The next id to hand out. */
   next: number
@@ -16,7 +16,7 @@ export type Project = {
 
 declare module 'claude-code' {
   interface PluginState {
-    punchlist: {
+    checklist: {
       /** The project the session is in, and its live list. */
       list: { project: string; items: Item[] }
     }

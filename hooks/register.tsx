@@ -3,13 +3,13 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Item, Project, Status } from '../types'
 
-const PANE = 'punchlist'
-const TITLE = 'Punchlist'
-const TOOL = 'mcp__punchlist__punchlist'
+const PANE = 'checklist'
+const TITLE = 'Checklist'
+const TOOL = 'mcp__checklist__checklist'
 const USAGE =
-  '/punchlist [add <title> [-- detail] | done|open|drop <id> | edit <id> <title> | remove <id> | clear | close]'
+  '/checklist [add <title> [-- detail] | done|open|drop <id> | edit <id> <title> | remove <id> | clear | close]'
 
-const list = atom({ plugin: 'punchlist', key: 'list' } as const, { project: '', items: [] as Item[] })
+const list = atom({ plugin: 'checklist', key: 'list' } as const, { project: '', items: [] as Item[] })
 
 const MARK: Record<Status, string> = { open: '[ ]', done: '[x]', dropped: '[-]' }
 const VERB: Partial<Record<string, Status>> = { done: 'done', open: 'open', drop: 'dropped' }
@@ -90,7 +90,7 @@ async function apply($: EngineInterface, project: string, op: Op): Promise<Outco
         items: [],
         text: removed.length
           ? `Cleared ${removed.length} item${removed.length === 1 ? '' : 's'}: ${removed.join('; ')}`
-          : 'The punchlist was already empty.',
+          : 'The checklist was already empty.',
       }
     }
   }
@@ -98,20 +98,20 @@ async function apply($: EngineInterface, project: string, op: Op): Promise<Outco
 
 const summary = (items: Item[]) =>
   items.length === 0
-    ? 'The punchlist is empty.'
+    ? 'The checklist is empty.'
     : items.map(i => `${MARK[i.status]} ${label(i)}${i.detail ? ` -- ${i.detail}` : ''}`).join('\n')
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
-      name: 'punchlist',
-      description: 'Per-project punchlist pane: add, edit, done|open|drop, remove, clear, close',
+      name: 'checklist',
+      description: 'Per-project checklist pane: add, edit, done|open|drop, remove, clear, close',
     })
     await $.tool.register({
-      name: 'punchlist',
+      name: 'checklist',
       isDeferred: false,
       description:
-        "The project's punchlist, shown in a pane beside the chat and kept per project across sessions. " +
+        "The project's checklist, shown in a pane beside the chat and kept per project across sessions. " +
         'Use it to record tasks the user agrees on, mark them done as you finish them, or read what is open. ' +
         'Actions: list; add (title, optional detail); done, open, drop, remove (id); edit (id, title); clear. ' +
         'Each answer ends with the whole list, one item per line as [ ] open, [x] done, [-] dropped.',
@@ -162,17 +162,17 @@ export const register: Register = on => {
     return { result: `${out.text}\n${summary(out.items)}` }
   })
 
-  on('command.run', { command: 'punchlist' }, async ($, e) => {
+  on('command.run', { command: 'checklist' }, async ($, e) => {
     const args = e.args.trim()
     if (!args) {
       await $.ui.open({ id: PANE, title: TITLE })
-      return { text: `Punchlist pane opened. ${USAGE}` }
+      return { text: `Checklist pane opened. ${USAGE}` }
     }
 
     const [verb, ...rest] = args.split(/\s+/)
     if (verb === 'close' && rest.length === 0) {
       await $.ui.close({ id: PANE })
-      return { text: 'Punchlist pane closed. /punchlist reopens it.' }
+      return { text: 'Checklist pane closed. /checklist reopens it.' }
     }
 
     const status = VERB[verb]
@@ -209,7 +209,7 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column">
         <Text bold>{open} open of {items.length}</Text>
-        {items.length === 0 && <Text dimColor>Nothing yet. /punchlist add &lt;title&gt; [-- detail]</Text>}
+        {items.length === 0 && <Text dimColor>Nothing yet. /checklist add &lt;title&gt; [-- detail]</Text>}
         {items.map(item => {
           const isOpen = item.status === 'open'
           return (
