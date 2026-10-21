@@ -21,7 +21,7 @@ tested on 2.1.296 and 2.1.306.
 At the prompt of a Claude Code terminal session:
 
 ```
-/plugin install checklist --marketplace mjb-it/punchlist
+/plugin install checklist --marketplace mjb-it/checklist
 ```
 
 Answer `y` to add the marketplace, then pick a scope (user is the usual one).
@@ -29,11 +29,11 @@ Answer `y` to add the marketplace, then pick a scope (user is the usual one).
 From a shell:
 
 ```
-claude plugin install checklist --marketplace mjb-it/punchlist
+claude plugin install checklist --marketplace mjb-it/checklist
 ```
 
 In the desktop app, where `/plugin` does not run: click + next to the prompt
-box, then Plugins, Add marketplace with `mjb-it/punchlist`, then Add plugin.
+box, then Plugins, Add marketplace with `mjb-it/checklist`, then Add plugin.
 
 ## Usage
 
