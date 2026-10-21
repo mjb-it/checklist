@@ -1,0 +1,13 @@
+{
+  "name": "checklist",
+  "owner": {
+    "name": "mjb-it"
+  },
+  "description": "A per-project checklist pane for Claude Code, managed with /checklist",
+  "plugins": [
+    {
+      "name": "checklist",
+      "source": "./"
+    }
+  ]
+}

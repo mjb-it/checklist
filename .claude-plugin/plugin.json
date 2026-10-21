@@ -1,0 +1,10 @@
+{
+  "name": "checklist",
+  "version": "0.1.0",
+  "description": "A per-project checklist pane beside the chat; /checklist adds, edits, and marks items open, done, or dropped",
+  "types": "./types/index.d.ts",
+  "license": "MIT",
+  "author": {
+    "name": "matt"
+  }
+}
