@@ -58,7 +58,7 @@ The plugin registers a `checklist` tool the model can call, so you can say
 "add that to the checklist" or "mark 3 done" in the chat, and Claude can
 tick items off as it finishes them. The tool takes an `action` (`list`,
 `add`, `done`, `open`, `drop`, `edit`, `remove`, `clear`) with `id`,
-`title` and `detail` as the action needs, and answers with the whole list.
+`title` and `detail` as the action needs, and answers with the whole list as text.
 It writes the same per-project list the command and the pane use.
 
 ## Developing

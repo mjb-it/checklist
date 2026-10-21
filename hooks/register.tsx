@@ -114,7 +114,7 @@ export const register: Register = on => {
         "The project's checklist, shown in a pane beside the chat and kept per project across sessions. " +
         'Use it to record tasks the user agrees on, mark them done as you finish them, or read what is open. ' +
         'Actions: list; add (title, optional detail); done, open, drop, remove (id); edit (id, title); clear. ' +
-        'Each answer carries the whole list.',
+        'Each answer ends with the whole list, one item per line as [ ] open, [x] done, [-] dropped.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -153,13 +153,13 @@ export const register: Register = on => {
 
     if (action === 'list') {
       const data = await load($, project)
-      return { result: { text: summary(data.items), items: data.items } }
+      return { result: summary(data.items) }
     }
     if (!op) return { deny: `Unknown action "${action}". ${USAGE}` }
     const out = await apply($, project, op)
     if (!out.ok) return { deny: out.text }
     if (out.items.length > 0) void $.ui.open({ id: PANE, title: TITLE })
-    return { result: { text: `${out.text}\n${summary(out.items)}`, items: out.items } }
+    return { result: `${out.text}\n${summary(out.items)}` }
   })
 
   on('command.run', { command: 'checklist' }, async ($, e) => {

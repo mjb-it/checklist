@@ -161,28 +161,23 @@ test('the model manages the list through the checklist tool', async ($, on) => {
   await $.session.start(START)
 
   const added = await $.tool.call({ tool: TOOL, action: 'add', title: 'From the model', detail: 'agreed in chat' })
-  expect(added.result).toEqual({
-    text: 'Added 1. From the model\n[ ] 1. From the model -- agreed in chat',
-    items: [{ id: '1', title: 'From the model', status: 'open', detail: 'agreed in chat' }],
-  })
+  // A plugin tool answers the model with text.
+  expect(added.result).toBe('Added 1. From the model\n[ ] 1. From the model -- agreed in chat')
   expect(opened).toEqual(['checklist'])
 
   const done = await $.tool.call({ tool: TOOL, action: 'done', id: '1' })
-  expect((done.result as any).text).toContain('1. From the model is now done.')
-  expect((await $.tool.call({ tool: TOOL, action: 'edit', id: '1', title: 'Renamed' })).result).toMatchObject({
-    items: [{ id: '1', title: 'Renamed', status: 'done' }],
-  })
-  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toEqual({
-    text: '[x] 1. Renamed -- agreed in chat',
-    items: [{ id: '1', title: 'Renamed', status: 'done', detail: 'agreed in chat' }],
-  })
+  expect(done.result).toBe('1. From the model is now done.\n[x] 1. From the model -- agreed in chat')
+  expect((await $.tool.call({ tool: TOOL, action: 'edit', id: '1', title: 'Renamed' })).result).toBe(
+    '1. Renamed (was: From the model)\n[x] 1. Renamed -- agreed in chat',
+  )
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('[x] 1. Renamed -- agreed in chat')
 
   // What the person typed and what the model did share one list.
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await row(ui, '1'))?.text).toBe('[x] 1. Renamed')
   await ui.unmount()
   expect((await run($, 'remove 1')).text).toBe('Removed 1. Renamed')
-  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toEqual({ text: 'The checklist is empty.', items: [] })
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('The checklist is empty.')
 
   // A bad call is refused with the reason.
   expect((await $.tool.call({ tool: TOOL, action: 'done', id: '9' })).deny).toBe('No item 9.')
