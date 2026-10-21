@@ -31,7 +31,12 @@ function stubEngine(on: On, initial = '/work/alpha', saved?: Record<string, unkn
     opened.push(e.id)
     return { value: { isPlaced: true } }
   })
-  return { opened, setProject: (root: string) => void (project = root) }
+  const closed: string[] = []
+  on('ui.close', (_, e) => {
+    closed.push(e.id)
+    return { value: undefined }
+  })
+  return { opened, closed, setProject: (root: string) => void (project = root) }
 }
 
 const run = ($: any, args: string) => $.command.run({ command: 'checklist', args })
@@ -74,6 +79,17 @@ test('an empty project shows an empty pane and does not open it at start', async
   const ran = await run($, '')
   expect(ran.text).toContain('Checklist pane opened')
   expect(opened).toEqual(['checklist'])
+})
+
+test('/checklist close closes the pane', async ($, on) => {
+  const { closed } = stubEngine(on)
+  await $.session.start(START)
+  await run($, '')
+
+  const ran = await run($, 'close')
+  expect(ran.text).toBe('Checklist pane closed. /checklist reopens it.')
+  expect(closed).toEqual(['checklist'])
+  expect((await run($, 'close now')).text).toContain('/checklist [add <title>')
 })
 
 test('each command changes the list and reports what it did', async ($, on) => {

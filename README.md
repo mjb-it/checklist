@@ -39,6 +39,7 @@ At the prompt:
 /checklist edit <id> <title>            retitle an item
 /checklist remove <id>                  delete an item (its id is not reused)
 /checklist clear                        delete every item; reports what it removed
+/checklist close                        close the pane
 ```
 
 Anything else prints one line of usage.

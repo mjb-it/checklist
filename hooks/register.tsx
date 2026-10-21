@@ -6,7 +6,7 @@ import type { Item, Project, Status } from '../types'
 const PANE = 'checklist'
 const TITLE = 'Checklist'
 const USAGE =
-  '/checklist [add <title> [-- detail] | done|open|drop <id> | edit <id> <title> | remove <id> | clear]'
+  '/checklist [add <title> [-- detail] | done|open|drop <id> | edit <id> <title> | remove <id> | clear | close]'
 
 const list = atom({ plugin: 'checklist', key: 'list' } as const, { project: '', items: [] as Item[] })
 
@@ -56,6 +56,10 @@ export const register: Register = on => {
     }
 
     const [verb, ...rest] = args.split(/\s+/)
+    if (verb === 'close' && rest.length === 0) {
+      await $.ui.close({ id: PANE })
+      return { text: 'Checklist pane closed. /checklist reopens it.' }
+    }
     const project = await projectKey($)
     const data = await load($, project)
     const find = (id: string | undefined) => data.items.find(i => i.id === (id ?? '').toLowerCase())
