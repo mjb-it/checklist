@@ -7,6 +7,15 @@ session's directory outside one) keeps its own list in the plugin's store,
 so one repository never sees another's items. The pane opens by itself at
 session start only when the project already has items.
 
+## Requirements
+
+Claude Code **2.1.287 or later**: this is a mod (a plugin with a hooks
+module), and earlier builds have no pane, no command hook and no plugin
+tools, so the plugin does not load there at all. The shell install form
+below needs 2.1.292 or later. A session that reaches Claude through
+Bedrock, Vertex or Foundry needs 2.1.304. Written against 2.1.306 and
+tested on 2.1.296 and 2.1.306.
+
 ## Install
 
 At the prompt of a Claude Code terminal session:
