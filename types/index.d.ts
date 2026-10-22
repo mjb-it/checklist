@@ -1,4 +1,4 @@
-export type Status = 'open' | 'done' | 'dropped'
+export type Status = 'open' | 'done' | 'dropped' | 'removed'
 
 export type Item = {
   id: string
@@ -9,8 +9,7 @@ export type Item = {
 
 /** One project's checklist, as the store keeps it under `project:<root>`. */
 export type Project = {
-  /** The next id to hand out. */
-  next: number
+  /** In id order; a new item takes the lowest id none holds. */
   items: Item[]
 }
 

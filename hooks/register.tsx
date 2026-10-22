@@ -11,7 +11,7 @@ const USAGE =
 
 const list = atom({ plugin: 'checklist', key: 'list' } as const, { project: '', root: '', items: [] as Item[] })
 
-const MARK: Record<Status, string> = { open: '[ ]', done: '[x]', dropped: '[-]' }
+const MARK: Record<Status, string> = { open: '[ ]', done: '[x]', dropped: '[-]', removed: '[~]' }
 const VERB: Partial<Record<string, Status>> = { done: 'done', open: 'open', drop: 'dropped' }
 
 /**
@@ -32,9 +32,7 @@ async function projectKey($: EngineInterface): Promise<string> {
 
 async function load($: EngineInterface, project: string): Promise<Project> {
   const saved = (await $.store.get(`project:${project}`)) as Project | undefined
-  return saved && Array.isArray(saved.items)
-    ? { next: saved.next ?? saved.items.length + 1, items: saved.items }
-    : { next: 1, items: [] }
+  return saved && Array.isArray(saved.items) ? { items: saved.items } : { items: [] }
 }
 
 async function save($: EngineInterface, project: string, data: Project): Promise<void> {
@@ -44,6 +42,14 @@ async function save($: EngineInterface, project: string, data: Project): Promise
 }
 
 const label = (item: Item) => `${item.id}. ${item.title}`
+
+/** The lowest id no item holds: a removed item's id goes back to the pool. */
+function freeId(items: Item[]): number {
+  const held = new Set(items.map(i => i.id))
+  let id = 1
+  while (held.has(String(id))) id++
+  return id
+}
 
 /** A click on a row: open becomes done, done and dropped become open. */
 const toggled = (status: Status): Status => (status === 'open' ? 'done' : 'open')
@@ -68,9 +74,9 @@ async function apply($: EngineInterface, project: string, op: Op): Promise<Outco
       const title = op.title.trim()
       if (!title) return fail('A title is needed.')
       const detail = op.detail?.trim()
-      const added: Item = { id: String(data.next), title, status: 'open', ...(detail ? { detail } : {}) }
-      const items = [...data.items, added]
-      await save($, project, { next: data.next + 1, items })
+      const added: Item = { id: String(freeId(data.items)), title, status: 'open', ...(detail ? { detail } : {}) }
+      const items = [...data.items, added].sort((a, b) => Number(a.id) - Number(b.id))
+      await save($, project, { items })
       return { ok: true, text: `Added ${label(added)}`, items }
     }
     case 'status': {
@@ -89,12 +95,13 @@ async function apply($: EngineInterface, project: string, op: Op): Promise<Outco
     }
     case 'remove': {
       if (!item) return fail(`No item ${op.id}.`)
-      const items = data.items.filter(i => i !== item)
+      // Kept under its number, struck through, so the numbers never skip.
+      const items = data.items.map(i => (i === item ? { ...i, status: 'removed' as const } : i))
       await save($, project, { ...data, items })
       return { ok: true, text: `Removed ${label(item)}`, items }
     }
     case 'clear': {
-      await save($, project, { next: 1, items: [] })
+      await save($, project, { items: [] })
       const removed = data.items.map(label)
       return {
         ok: true,
@@ -105,6 +112,27 @@ async function apply($: EngineInterface, project: string, op: Op): Promise<Outco
       }
     }
   }
+}
+
+/** A tool call's row, in a line: the action and what it names, never the detail. */
+function callLine(input: Record<string, unknown>): string {
+  const id = input.id === undefined ? '' : ` ${String(input.id)}`
+  const title = input.title === undefined ? '' : ` "${String(input.title)}"`
+  return `Checklist · ${String(input.action ?? '')}${id}${title}`
+}
+
+/**
+ * A tool answer in a line: its first, or a count when it is a list alone.
+ * Undefined for an answer in no shape this tool gives, which the engine draws.
+ */
+function resultLine(output: unknown): string | undefined {
+  if (typeof output !== 'string' || !output) return undefined
+  const lines = output.split('\n')
+  const marks = Object.values(MARK)
+  if (!marks.some(m => lines[0].startsWith(`${m} `))) return lines[0]
+  const kept = lines.filter(l => !l.startsWith(`${MARK.removed} `)).length
+  const open = lines.filter(l => l.startsWith(`${MARK.open} `)).length
+  return `${kept} item${kept === 1 ? '' : 's'}, ${open} open`
 }
 
 const summary = (items: Item[]) =>
@@ -125,7 +153,8 @@ export const register: Register = on => {
         "The project's checklist, shown in a pane beside the chat and kept per project across sessions. " +
         'Use it to record tasks the user agrees on, mark them done as you finish them, or read what is open. ' +
         'Actions: list; add (title, optional detail); done, open, drop, remove (id); edit (id, title); clear. ' +
-        'Each answer ends with the whole list, one item per line as [ ] open, [x] done, [-] dropped.',
+        'remove keeps the item under its number, struck through, and open brings it back; clear empties the list. ' +
+        'Each answer ends with the whole list, one item per line as [ ] open, [x] done, [-] dropped, [~] removed.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -215,18 +244,48 @@ export const register: Register = on => {
     return { text: out.text }
   })
 
+  // Claude's calls to the tool, one line each in the transcript; ctrl+o shows them whole.
+  on('ui.render', { component: 'ToolUse', props: { tool: TOOL } }, async ($, e, next) => {
+    if (e.props.isExpanded || typeof e.props.input !== 'object' || e.props.input === null) return next(e)
+    const { Text } = $.ui.resolve(e)
+    return <Text dimColor={e.props.isRunning}>{callLine(e.props.input as Record<string, unknown>)}</Text>
+  })
+
+  on('ui.render', { component: 'ToolResult', props: { tool: TOOL } }, async ($, e, next) => {
+    const line = resultLine(e.props.output)
+    if (e.props.isExpanded || e.props.isErrored || line === undefined) return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    return (
+      <Box paddingLeft={2}>
+        <Text dimColor>{line}</Text>
+      </Box>
+    )
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const { project, items } = await read($, list)
     const wide = e.props.bodyColumns >= 56
     const open = items.filter(i => i.status === 'open').length
+    // The header counts what is on the list; removed items stand only to keep the numbers.
+    const kept = items.filter(i => i.status !== 'removed').length
 
     return (
       <Box flexDirection="column">
-        <Text bold>{open} open of {items.length}</Text>
+        <Text bold>{open} open of {kept}</Text>
         {items.length === 0 && <Text dimColor>Nothing yet. /checklist add &lt;title&gt; [-- detail]</Text>}
         {items.map(item => {
           const isOpen = item.status === 'open'
+          // A removed item is no row to click: /checklist open <id> brings it back.
+          if (item.status === 'removed')
+            return (
+              <Text key={item.id} dimColor>
+                {MARK.removed}{' '}
+                <Text dimColor strikethrough>
+                  {label(item)}
+                </Text>
+              </Text>
+            )
           return (
             <Box key={item.id} flexDirection="column">
               <Button

@@ -2,7 +2,7 @@
 
 A Claude Code pane beside the chat that lists a checklist for the project
 you are in: each item has a number, a title, an optional one-line detail,
-and a status of open, done, or dropped. Every project (git root, or the
+and a status of open, done, dropped, or removed. Every project (git root, or the
 session's directory outside one) keeps its own list in the plugin's store,
 so one repository never sees another's items. The project is worked out
 from where the session is rooted, so a `cd` in the shell mid-session keeps
@@ -48,7 +48,7 @@ At the prompt:
 /checklist open <id>                    mark an item open     [ ]
 /checklist drop <id>                    mark an item dropped  [-]
 /checklist edit <id> <title>            retitle an item
-/checklist remove <id>                  delete an item (its id is not reused)
+/checklist remove <id>                  mark an item removed  [~]
 /checklist clear                        delete every item; reports what it removed
 /checklist close                        close the pane
 /checklist version                      print the installed plugin's version
@@ -57,11 +57,14 @@ At the prompt:
 Anything else prints one line of usage.
 
 The pane shows a header like `3 open of 10`, then every item in order: open
-items bold, done items dim, dropped items struck through. The detail shows on
-a dim second line when the pane is at least 56 columns wide.
+items bold, done items dim, dropped items struck through, removed items
+struck through and dimmer still. A removed item keeps its number, so the
+numbers never skip, and the header leaves it out; `open <id>` brings it
+back. The detail shows on a dim second line when the pane is at least 56
+columns wide.
 
 A click on a row toggles it: an open item becomes done, a done or dropped
-item becomes open. Clicks reach the pane in the fullscreen terminal and in
+item becomes open. A removed item does not answer a click. Clicks reach the pane in the fullscreen terminal and in
 the desktop app.
 
 ## The Claude session can use it too
@@ -72,6 +75,11 @@ tick items off as it finishes them. The tool takes an `action` (`list`,
 `add`, `done`, `open`, `drop`, `edit`, `remove`, `clear`) with `id`,
 `title` and `detail` as the action needs, and answers with the whole list as text.
 It writes the same per-project list the command and the pane use.
+
+In the transcript each of those calls is one line, like `Checklist · done 3`,
+with one line of result (`3. Ship it is now done.`, or `4 items, 2 open` for
+a list) rather than the whole list. Claude still reads the whole list; ctrl+o
+shows the calls in full.
 
 ## How it hooks Claude Code
 
@@ -90,7 +98,10 @@ else runs. What it hooks, and what each hook touches:
   tool. It stands in for no built-in or MCP tool and never sees a call to
   one.
 - **`ui.render`** for the `Pane` with the id `checklist`: draws the pane
-  from the live list. It draws nothing else.
+  from the live list. Also for the `ToolUse` row and `ToolResult` block of
+  a call to its own tool, matched to `tool: "mcp__checklist__checklist"`
+  only: draws each as one line, and hands the expanded view (ctrl+o) and
+  errors back to the engine. It draws nothing else.
 
 The plugin reads and writes only its own store, under one key per project,
 and its own state value; `/checklist version` also reads its own
