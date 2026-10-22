@@ -285,3 +285,18 @@ test('a /cd to another project follows it to that project\'s list', async ($, on
   setProject('/work/alpha')
   expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('[ ] 1. Alpha only')
 })
+
+test('/checklist version prints the version in the plugin\'s own manifest', async ($, on) => {
+  stubEngine(on)
+  const read: string[] = []
+  on('fs.read', (_, e) => {
+    read.push(e.path)
+    return { value: JSON.stringify({ name: 'checklist', version: '9.8.7' }) }
+  })
+  await $.session.start(START)
+
+  expect((await run($, 'version')).text).toBe('checklist 9.8.7')
+  expect(read).toHaveLength(1)
+  expect(read[0]).toEndWith('/.claude-plugin/plugin.json')
+  expect((await run($, 'version now')).text).toContain('/checklist [add <title>')
+})

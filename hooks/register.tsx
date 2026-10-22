@@ -7,7 +7,7 @@ const PANE = 'checklist'
 const TITLE = 'Checklist'
 const TOOL = 'mcp__checklist__checklist'
 const USAGE =
-  '/checklist [add <title> [-- detail] | done|open|drop <id> | edit <id> <title> | remove <id> | clear | close]'
+  '/checklist [add <title> [-- detail] | done|open|drop <id> | edit <id> <title> | remove <id> | clear | close | version]'
 
 const list = atom({ plugin: 'checklist', key: 'list' } as const, { project: '', root: '', items: [] as Item[] })
 
@@ -116,7 +116,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'checklist',
-      description: 'Per-project checklist pane: add, edit, done|open|drop, remove, clear, close',
+      description: 'Per-project checklist pane: add, edit, done|open|drop, remove, clear, close, version',
     })
     await $.tool.register({
       name: 'checklist',
@@ -184,6 +184,10 @@ export const register: Register = on => {
     if (verb === 'close' && rest.length === 0) {
       await $.ui.close({ id: PANE })
       return { text: 'Checklist pane closed. /checklist reopens it.' }
+    }
+    if (verb === 'version' && rest.length === 0) {
+      const manifest = JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`))
+      return { text: `${$.plugin.name} ${manifest.version ?? '(no version in plugin.json)'}` }
     }
 
     const status = VERB[verb]

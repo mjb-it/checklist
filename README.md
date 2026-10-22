@@ -51,6 +51,7 @@ At the prompt:
 /checklist remove <id>                  delete an item (its id is not reused)
 /checklist clear                        delete every item; reports what it removed
 /checklist close                        close the pane
+/checklist version                      print the installed plugin's version
 ```
 
 Anything else prints one line of usage.
@@ -92,7 +93,8 @@ else runs. What it hooks, and what each hook touches:
   from the live list. It draws nothing else.
 
 The plugin reads and writes only its own store, under one key per project,
-and its own state value. It makes no network requests and runs no
+and its own state value; `/checklist version` also reads its own
+`.claude-plugin/plugin.json`. It makes no network requests and runs no
 processes.
 
 ## Developing
