@@ -9,15 +9,25 @@ const TOOL = 'mcp__checklist__checklist'
 const USAGE =
   '/checklist [add <title> [-- detail] | done|open|drop <id> | edit <id> <title> | remove <id> | clear | close]'
 
-const list = atom({ plugin: 'checklist', key: 'list' } as const, { project: '', items: [] as Item[] })
+const list = atom({ plugin: 'checklist', key: 'list' } as const, { project: '', root: '', items: [] as Item[] })
 
 const MARK: Record<Status, string> = { open: '[ ]', done: '[x]', dropped: '[-]' }
 const VERB: Partial<Record<string, Status>> = { done: 'done', open: 'open', drop: 'dropped' }
 
-/** The key one project's list is stored under: its git root, else the session's root. */
+/**
+ * The key one project's list is stored under: its git root, else the session's root.
+ * Worked out once per session root and kept, since `$.session.repo()` reads the
+ * shell's directory and a `cd` there would move the list; a `/cd` moves the root.
+ */
 async function projectKey($: EngineInterface): Promise<string> {
+  const root = await $.session.root()
+  const kept = await read($, list)
+  if (kept.project && kept.root === root) return kept.project
   const repo = await $.session.repo()
-  return repo?.root ?? (await $.session.root())
+  const project = repo?.root ?? root
+  const data = await load($, project)
+  await update($, list, () => ({ project, root, items: data.items }))
+  return project
 }
 
 async function load($: EngineInterface, project: string): Promise<Project> {
@@ -29,7 +39,8 @@ async function load($: EngineInterface, project: string): Promise<Project> {
 
 async function save($: EngineInterface, project: string, data: Project): Promise<void> {
   await $.store.set(`project:${project}`, data)
-  await update($, list, () => ({ project, items: data.items }))
+  // A click on a pane drawn before a /cd saves the project it shows, not the one now kept.
+  await update($, list, state => (state.project === project ? { ...state, items: data.items } : state))
 }
 
 const label = (item: Item) => `${item.id}. ${item.title}`
@@ -128,7 +139,7 @@ export const register: Register = on => {
     })
     const project = await projectKey($)
     const data = await load($, project)
-    await update($, list, () => ({ project, items: data.items }))
+    await update($, list, state => ({ ...state, items: data.items }))
     // Open unasked only when there is something to show.
     if (data.items.length > 0) void $.ui.open({ id: PANE, title: TITLE })
 

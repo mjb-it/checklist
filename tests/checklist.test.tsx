@@ -21,12 +21,14 @@ const TOOL = 'mcp__checklist__checklist'
 
 /** The engine beneath the plugin: a store, a project, and the pane's answers. */
 function stubEngine(on: On, initial = '/work/alpha', saved?: Record<string, unknown>) {
+  // The session's root, and the repository its shell is in now: a shell `cd` moves only the second.
   let project = initial
+  let repo: string | null = initial
   mock.store(on, saved)
   on('command.register', () => ({ value: { command: 'checklist' } }))
   on('tool.register', () => ({ value: { tool: TOOL } }))
   on('tool.call', () => ({ deny: 'nothing beneath the plugin serves this tool' }))
-  on('session.repo', () => ({ value: { root: project, remote: null, internal: false, name: null } }))
+  on('session.repo', () => ({ value: repo === null ? null : { root: repo, remote: null, internal: false, name: null } }))
   on('session.root', () => ({ value: project }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   const opened: string[] = []
@@ -39,7 +41,12 @@ function stubEngine(on: On, initial = '/work/alpha', saved?: Record<string, unkn
     closed.push(e.id)
     return { value: undefined }
   })
-  return { opened, closed, setProject: (root: string) => void (project = root) }
+  return {
+    opened,
+    closed,
+    setProject: (root: string) => void (project = repo = root),
+    setShellDir: (repoRoot: string | null) => void (repo = repoRoot),
+  }
 }
 
 const run = ($: any, args: string) => $.command.run({ command: 'checklist', args })
@@ -234,4 +241,47 @@ test('a list saved by an earlier session is read back and opens the pane', async
 
   // The next id carries on from where the earlier session left it.
   expect((await run($, 'add New this session')).text).toBe('Added 4. New this session')
+})
+
+test('a shell cd during the session keeps the list where it was', async ($, on) => {
+  const { setShellDir } = stubEngine(on, '/work/alpha')
+  await $.session.start(START)
+  await run($, 'add Before the cd')
+
+  // The shell leaves the repository: git answers nothing, but the session's root has not moved.
+  setShellDir(null)
+  expect((await run($, 'add After leaving')).text).toBe('Added 2. After leaving')
+  // Into another repository: still the same list.
+  setShellDir('/work/beta')
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe(
+    '[ ] 1. Before the cd\n[ ] 2. After leaving',
+  )
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /open of/ }))?.text).toBe('2 open of 2')
+  await ui.press({ key: 'item:1' })
+  expect((await row(ui, '1'))?.text).toBe('[x] 1. Before the cd')
+  await ui.unmount()
+
+  // A reload runs session.start again from the moved shell: the list stays put.
+  await $.session.start(START)
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe(
+    '[x] 1. Before the cd\n[ ] 2. After leaving',
+  )
+})
+
+test('a /cd to another project follows it to that project\'s list', async ($, on) => {
+  const { setProject } = stubEngine(on, '/work/alpha')
+  await $.session.start(START)
+  await run($, 'add Alpha only')
+
+  // /cd moves the session's root, with no new session.start.
+  setProject('/work/beta')
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('The checklist is empty.')
+  expect((await run($, 'add Beta only')).text).toBe('Added 1. Beta only')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await row(ui, '1'))?.text).toBe('[ ] 1. Beta only')
+  await ui.unmount()
+
+  setProject('/work/alpha')
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('[ ] 1. Alpha only')
 })

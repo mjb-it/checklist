@@ -17,8 +17,8 @@ export type Project = {
 declare module 'claude-code' {
   interface PluginState {
     checklist: {
-      /** The project the session is in, and its live list. */
-      list: { project: string; items: Item[] }
+      /** The project the session is in, the session root it was worked out from, and its live list. */
+      list: { project: string; root: string; items: Item[] }
     }
   }
 }

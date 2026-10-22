@@ -4,7 +4,9 @@ A Claude Code pane beside the chat that lists a checklist for the project
 you are in: each item has a number, a title, an optional one-line detail,
 and a status of open, done, or dropped. Every project (git root, or the
 session's directory outside one) keeps its own list in the plugin's store,
-so one repository never sees another's items. The pane opens by itself at
+so one repository never sees another's items. The project is worked out
+from where the session is rooted, so a `cd` in the shell mid-session keeps
+the same list; `/cd` moves to the new project's list. The pane opens by itself at
 session start only when the project already has items.
 
 ## Requirements
