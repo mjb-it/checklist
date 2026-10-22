@@ -103,6 +103,13 @@ test('a click on a row toggles it between open and done', async ($, on) => {
   const again = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await again.find({ type: 'Text', text: /open of/ }))?.text).toBe('2 open of 2')
   await again.unmount()
+
+  // After the first is removed, a click still toggles the row it was drawn for, now first.
+  await run($, 'remove 1')
+  const moved = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await moved.press({ key: 'item:2' })
+  expect((await row(moved, '2'))?.text).toBe('[x] 1. Dropped one')
+  await moved.unmount()
 })
 
 test('an empty project shows an empty pane and does not open it at start', async ($, on) => {
@@ -142,24 +149,21 @@ test('each command changes the list and reports what it did', async ($, on) => {
   expect((await run($, 'edit 2 Second thing, renamed')).text).toBe('2. Second thing, renamed (was: Second thing)')
   expect((await run($, 'remove 1')).text).toBe('Removed 1. First thing')
 
-  // A removed item stays, struck through under its number, so the numbers run on with no gap.
-  expect((await run($, 'add Third thing')).text).toBe('Added 3. Third thing')
+  // A removed item is gone and the rest move up: the numbers never skip.
+  expect((await run($, 'add Third thing')).text).toBe('Added 2. Third thing')
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  // The header leaves removed items out.
   expect((await ui.find({ type: 'Text', text: /open of/ }))?.text).toBe('1 open of 2')
-  expect((await ui.find({ type: 'Text', text: /First thing/ }))?.text).toBe('[~] 1. First thing')
-  expect((await row(ui, '2'))?.text).toBe('[-] 2. Second thing, renamed')
-  expect((await row(ui, '3'))?.text).toBe('[ ] 3. Third thing')
+  expect(await ui.find({ type: 'Text', text: /First thing/ })).toBeUndefined()
+  // Rows are keyed by uid; their numbers are positions.
+  expect((await row(ui, '2'))?.text).toBe('[-] 1. Second thing, renamed')
+  expect((await row(ui, '3'))?.text).toBe('[ ] 2. Third thing')
   await ui.unmount()
+  // Claude reads the uids beside the positions.
   expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe(
-    '[~] 1. First thing\n[-] 2. Second thing, renamed -- with a detail\n[ ] 3. Third thing',
+    '[-] 1. Second thing, renamed (#2) -- with a detail\n[ ] 2. Third thing (#3)',
   )
 
-  // open brings a removed item back.
-  expect((await run($, 'open 1')).text).toBe('1. First thing is now open.')
-  expect((await run($, 'clear')).text).toBe(
-    'Cleared 3 items: 1. First thing; 2. Second thing, renamed; 3. Third thing',
-  )
+  expect((await run($, 'clear')).text).toBe('Cleared 2 items: 1. Second thing, renamed; 2. Third thing')
   expect((await run($, 'clear')).text).toBe('The checklist was already empty.')
 })
 
@@ -168,7 +172,7 @@ test('unknown input prints one line of usage', async ($, on) => {
   await $.session.start(START)
   await run($, 'add Only item')
 
-  for (const bad of ['frobnicate', 'done', 'done 9', 'done 1 2', 'edit 1', 'remove', 'add', 'clear now']) {
+  for (const bad of ['frobnicate', 'done', 'done 9', 'done 0', 'done x', 'done #1', 'done 1 2', 'edit 1', 'remove', 'add', 'clear now']) {
     const ran = await run($, bad)
     expect(ran.text).toContain('/checklist [add <title>')
     expect(ran.text.split('\n').length).toBe(1)
@@ -180,31 +184,58 @@ test('the model manages the list through the checklist tool', async ($, on) => {
   await $.session.start(START)
 
   const added = await $.tool.call({ tool: TOOL, action: 'add', title: 'From the model', detail: 'agreed in chat' })
-  // A plugin tool answers the model with text.
-  expect(added.result).toBe('Added 1. From the model\n[ ] 1. From the model -- agreed in chat')
+  // A change answers with the one item it touched, its uid beside its position.
+  expect(added.result).toBe('Added 1. From the model (#1)')
   expect(opened).toEqual(['checklist'])
 
-  const done = await $.tool.call({ tool: TOOL, action: 'done', id: '1' })
-  expect(done.result).toBe('1. From the model is now done.\n[x] 1. From the model -- agreed in chat')
+  expect((await $.tool.call({ tool: TOOL, action: 'done', id: '#1' })).result).toBe('1. From the model (#1) is now done.')
   expect((await $.tool.call({ tool: TOOL, action: 'edit', id: '1', title: 'Renamed' })).result).toBe(
-    '1. Renamed (was: From the model)\n[x] 1. Renamed -- agreed in chat',
+    '1. Renamed (#1) (was: From the model)',
   )
-  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('[x] 1. Renamed -- agreed in chat')
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('[x] 1. Renamed (#1) -- agreed in chat')
 
   // What the person typed and what the model did share one list.
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await row(ui, '1'))?.text).toBe('[x] 1. Renamed')
   await ui.unmount()
   expect((await run($, 'remove 1')).text).toBe('Removed 1. Renamed')
-  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('[~] 1. Renamed -- agreed in chat')
-  expect((await $.tool.call({ tool: TOOL, action: 'remove', id: '1' })).result).toBe(
-    'Removed 1. Renamed\n[~] 1. Renamed -- agreed in chat',
-  )
-  expect((await $.tool.call({ tool: TOOL, action: 'clear' })).result).toBe('Cleared 1 item: 1. Renamed\nThe checklist is empty.')
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('The checklist is empty.')
 
   // A bad call is refused with the reason.
-  expect((await $.tool.call({ tool: TOOL, action: 'done', id: '9' })).deny).toBe('No item 9.')
+  expect((await $.tool.call({ tool: TOOL, action: 'done', id: '1' })).deny).toBe('No item #1.')
+  expect((await $.tool.call({ tool: TOOL, action: 'done', position: 9 })).deny).toBe('No item at position 9.')
+  expect((await $.tool.call({ tool: TOOL, action: 'done' })).deny).toBe('Name the item by id or by position: one of them.')
+  expect((await $.tool.call({ tool: TOOL, action: 'done', id: '1', position: 1 })).deny).toBe(
+    'Name the item by id or by position: one of them.',
+  )
+  expect((await $.tool.call({ tool: TOOL, action: 'done', id: 'abc' })).deny).toContain('is no id')
+  expect((await $.tool.call({ tool: TOOL, action: 'done', position: 0 })).deny).toContain('is no position')
   expect((await $.tool.call({ tool: TOOL, action: 'frobnicate' })).deny).toContain('Unknown action')
+})
+
+test('an id names the same item however the positions move; a position names the list as it is now', async ($, on) => {
+  stubEngine(on)
+  await $.session.start(START)
+  for (const title of ['Alpha', 'Beta', 'Gamma', 'Delta']) await $.tool.call({ tool: TOOL, action: 'add', title })
+
+  // Claude removes one: it is told the rest moved up.
+  expect((await $.tool.call({ tool: TOOL, action: 'remove', position: 2 })).result).toBe(
+    'Removed 2. Beta (#2); the items after it moved up one place',
+  )
+  // The person removes the first in the pane's numbering, unseen by Claude.
+  expect((await run($, 'remove 1')).text).toBe('Removed 1. Alpha')
+
+  // Claude's #3 is still Gamma, though Gamma is now first.
+  expect((await $.tool.call({ tool: TOOL, action: 'done', id: '#3' })).result).toBe('1. Gamma (#3) is now done.')
+  // "Mark 2 done", as the person sees 2 now: Delta.
+  expect((await $.tool.call({ tool: TOOL, action: 'done', position: 2 })).result).toBe('2. Delta (#4) is now done.')
+
+  // A uid is never handed out again, after a remove or a clear.
+  expect((await $.tool.call({ tool: TOOL, action: 'add', title: 'Epsilon' })).result).toBe('Added 3. Epsilon (#5)')
+  expect((await $.tool.call({ tool: TOOL, action: 'remove', id: '5' })).result).toBe('Removed 3. Epsilon (#5)')
+  await $.tool.call({ tool: TOOL, action: 'clear' })
+  expect((await $.tool.call({ tool: TOOL, action: 'add', title: 'Zeta' })).result).toBe('Added 1. Zeta (#6)')
+  expect((await $.tool.call({ tool: TOOL, action: 'done', id: '#3' })).deny).toBe('No item #3.')
 })
 
 test('each project keeps its own list', async ($, on) => {
@@ -249,17 +280,17 @@ test('a list saved by an earlier session is read back and opens the pane', async
   await $.session.start(START)
   expect(opened).toEqual(['checklist'])
 
+  // Saved before uids: each item's number becomes its uid, and the gap closes.
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await ui.find({ type: 'Text', text: /open of/ }))?.text).toBe('1 open of 2')
-  expect((await row(ui, '3'))?.text).toBe('[x] 3. Kept done')
+  expect((await row(ui, '3'))?.text).toBe('[x] 2. Kept done')
   expect((await ui.find({ type: 'Text', text: /from last time/ }))?.text).toContain('from last time')
   await ui.unmount()
 
-  // The gap an earlier session left is filled first, in its place; then the list carries on.
-  expect((await run($, 'add New this session')).text).toBe('Added 2. New this session')
-  expect((await run($, 'add And another')).text).toBe('Added 4. And another')
+  // The new item goes last, and its uid carries on from the saved one.
+  expect((await run($, 'add New this session')).text).toBe('Added 3. New this session')
   expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe(
-    '[ ] 1. Kept open -- from last time\n[ ] 2. New this session\n[x] 3. Kept done\n[ ] 4. And another',
+    '[ ] 1. Kept open (#1) -- from last time\n[x] 2. Kept done (#3)\n[ ] 3. New this session (#4)',
   )
 })
 
@@ -274,7 +305,7 @@ test('a shell cd during the session keeps the list where it was', async ($, on) 
   // Into another repository: still the same list.
   setShellDir('/work/beta')
   expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe(
-    '[ ] 1. Before the cd\n[ ] 2. After leaving',
+    '[ ] 1. Before the cd (#1)\n[ ] 2. After leaving (#2)',
   )
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await ui.find({ type: 'Text', text: /open of/ }))?.text).toBe('2 open of 2')
@@ -285,7 +316,7 @@ test('a shell cd during the session keeps the list where it was', async ($, on) 
   // A reload runs session.start again from the moved shell: the list stays put.
   await $.session.start(START)
   expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe(
-    '[x] 1. Before the cd\n[ ] 2. After leaving',
+    '[x] 1. Before the cd (#1)\n[ ] 2. After leaving (#2)',
   )
 })
 
@@ -303,7 +334,7 @@ test('a /cd to another project follows it to that project\'s list', async ($, on
   await ui.unmount()
 
   setProject('/work/alpha')
-  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('[ ] 1. Alpha only')
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('[ ] 1. Alpha only (#1)')
 })
 
 test('/checklist version prints the version in the plugin\'s own manifest', async ($, on) => {
@@ -341,10 +372,15 @@ test('a checklist tool call is drawn as one short line', async ($, on) => {
   stubEngine(on)
   await $.session.start(START)
 
+  await run($, 'add Ship it')
+
+  // Never a uid: an item named by id shows its title, or its id once it is gone.
   for (const [input, line] of [
     [{ action: 'add', title: 'Write the README', detail: 'a long detail the row leaves out' }, 'Checklist · add "Write the README"'],
-    [{ action: 'done', id: '3' }, 'Checklist · done 3'],
-    [{ action: 'edit', id: '2', title: 'Renamed' }, 'Checklist · edit 2 "Renamed"'],
+    [{ action: 'done', position: 3 }, 'Checklist · done 3'],
+    [{ action: 'done', id: '#1' }, 'Checklist · done "Ship it"'],
+    [{ action: 'done', id: '#7' }, 'Checklist · done'],
+    [{ action: 'edit', id: '1', title: 'Renamed' }, 'Checklist · edit "Renamed"'],
     [{ action: 'list' }, 'Checklist · list'],
   ] as const) {
     const ui = await $.ui.mount(toolRow(input))
@@ -357,12 +393,16 @@ test('a checklist tool result shows its first line, or a count for a list', asyn
   stubEngine(on)
   await $.session.start(START)
 
-  const added = await $.ui.mount(resultBlock('Added 3. Write the README\n[ ] 1. One\n[x] 2. Two\n[ ] 3. Write the README'))
+  // The uid Claude reads is left out of what the person sees.
+  const added = await $.ui.mount(resultBlock('Added 3. Write the README (#12)'))
   expect(await textOf(added)).toBe('Added 3. Write the README')
-  expect(await added.find({ type: 'Text', text: /One/ })).toBeUndefined()
   await added.unmount()
 
-  const listed = await $.ui.mount(resultBlock('[ ] 1. One -- a detail\n[x] 2. Two\n[-] 3. Three\n[~] 4. Removed'))
+  const removed = await $.ui.mount(resultBlock('Removed 2. Beta (#2); the items after it moved up one place'))
+  expect(await textOf(removed)).toBe('Removed 2. Beta')
+  await removed.unmount()
+
+  const listed = await $.ui.mount(resultBlock('[ ] 1. One (#1) -- a detail\n[x] 2. Two (#4)\n[-] 3. Three (#5)'))
   expect(await textOf(listed)).toBe('3 items, 1 open')
   await listed.unmount()
 
@@ -375,7 +415,7 @@ test('the expanded view and errors keep the engine\'s full drawing', async ($, o
   stubEngine(on)
   await $.session.start(START)
 
-  const row = await $.ui.mount(toolRow({ action: 'done', id: '3' }, { isExpanded: true }))
+  const row = await $.ui.mount(toolRow({ action: 'done', position: 3 }, { isExpanded: true }))
   expect(await row.find({ type: 'Text', text: 'Checklist · done 3' })).toBeUndefined()
   await row.unmount()
 
@@ -389,19 +429,20 @@ test('the expanded view and errors keep the engine\'s full drawing', async ($, o
   await errored.unmount()
 })
 
-test('a removed item is struck through, dim, and not reopened by a click', async ($, on) => {
-  stubEngine(on)
+test('a list saved with removed items lets them go and closes the gaps', async ($, on) => {
+  const saved = {
+    'project:/work/alpha': {
+      items: [
+        { id: '1', title: 'Kept', status: 'done' },
+        { id: '2', title: 'Typo item', status: 'removed' },
+        { id: '4', title: 'Real item', status: 'open' },
+      ],
+    },
+  }
+  stubEngine(on, '/work/alpha', saved)
   await $.session.start(START)
-  await run($, 'add Keep me')
-  await run($, 'add Typo item')
-  await run($, 'remove 2')
 
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await row(ui, '2')).toBeUndefined()
-  const removed = await ui.find({ type: 'Text', text: /Typo item/ })
-  expect(removed?.text).toBe('[~] 2. Typo item')
-  expect(removed?.props).toMatchObject({ dimColor: true })
-  expect(removed?.children.at(-1)).toMatchObject({ props: { strikethrough: true }, children: ['2. Typo item'] })
-  expect((await ui.find({ type: 'Text', text: /open of/ }))?.text).toBe('1 open of 1')
-  await ui.unmount()
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('[x] 1. Kept (#1)\n[ ] 2. Real item (#4)')
+  expect((await run($, 'add Next')).text).toBe('Added 3. Next')
+  expect((await $.tool.call({ tool: TOOL, action: 'done', id: '#5' })).result).toBe('3. Next (#5) is now done.')
 })

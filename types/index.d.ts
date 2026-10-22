@@ -1,7 +1,8 @@
-export type Status = 'open' | 'done' | 'dropped' | 'removed'
+export type Status = 'open' | 'done' | 'dropped'
 
 export type Item = {
-  id: string
+  /** The item's own id: kept for its life and never handed out again. Claude names items by it. */
+  uid: number
   title: string
   detail?: string
   status: Status
@@ -9,7 +10,9 @@ export type Item = {
 
 /** One project's checklist, as the store keeps it under `project:<root>`. */
 export type Project = {
-  /** In id order; a new item takes the lowest id none holds. */
+  /** The next uid to hand out. */
+  next: number
+  /** In list order: an item's position is its place here, from 1, with no gaps. */
   items: Item[]
 }
 
