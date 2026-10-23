@@ -24,13 +24,19 @@ function stubEngine(on: On, initial = '/work/alpha', saved?: Record<string, unkn
   // The session's root, and the repository its shell is in now: a shell `cd` moves only the second.
   let project = initial
   let repo: string | null = initial
+  let session = 'session-one'
+  let now = Date.UTC(2026, 9, 23)
   mock.store(on, saved)
   on('command.register', () => ({ value: { command: 'checklist' } }))
   on('tool.register', () => ({ value: { tool: TOOL } }))
   on('tool.call', () => ({ deny: 'nothing beneath the plugin serves this tool' }))
   on('session.repo', () => ({ value: repo === null ? null : { root: repo, remote: null, internal: false, name: null } }))
   on('session.root', () => ({ value: project }))
+  on('session.id', () => ({ value: session }))
+  on('clock.now', () => ({ value: now }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.end', (_, e) => ({ sessionId: e.sessionId }))
+  on('prompt.submit', (_, e) => ({ text: e.text, context: [] }))
   // The engine's own drawing of a site, where a hook hands it on.
   on('ui.render', () => ({ type: 'Text', children: ['engine'] }))
   const opened: string[] = []
@@ -48,6 +54,8 @@ function stubEngine(on: On, initial = '/work/alpha', saved?: Record<string, unkn
     closed,
     setProject: (root: string) => void (project = repo = root),
     setShellDir: (repoRoot: string | null) => void (repo = repoRoot),
+    setSession: (id: string) => void (session = id),
+    passDays: (days: number) => void (now += days * 24 * 60 * 60 * 1000),
   }
 }
 
@@ -238,32 +246,24 @@ test('an id names the same item however the positions move; a position names the
   expect((await $.tool.call({ tool: TOOL, action: 'done', id: '#3' })).deny).toBe('No item #3.')
 })
 
-test('each project keeps its own list', async ($, on) => {
-  const { setProject } = stubEngine(on, '/work/alpha')
+test('each session keeps its own list, even in the same project', async ($, on) => {
+  const { setSession } = stubEngine(on, '/work/alpha')
   await $.session.start(START)
-  await run($, 'add Alpha only')
+  await run($, 'add One only')
 
-  // A session in another repository: the engine answers a different root.
-  setProject('/work/beta')
-  await $.session.start({ ...START, cwd: '/work/beta' })
-
+  // Another session in the same directory starts with a list of its own.
+  setSession('session-two')
+  await $.session.start(START)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await ui.find({ type: 'Text', text: /open of/ }))?.text).toBe('0 open of 0')
-  expect(await row(ui, '1')).toBeUndefined()
   await ui.unmount()
+  expect((await run($, 'add Two only')).text).toBe('Added 1. Two only')
+  expect((await run($, 'done 1')).text).toBe('1. Two only is now done.')
 
-  expect((await run($, 'add Beta only')).text).toBe('Added 1. Beta only')
-  expect((await run($, 'done 1')).text).toBe('1. Beta only is now done.')
-
-  // Back in the first project, its list is untouched and beta's is unseen.
-  setProject('/work/alpha')
+  // Resuming the first session brings back its list, untouched by the second.
+  setSession('session-one')
   await $.session.start(START)
-  const alpha = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await alpha.find({ type: 'Text', text: /open of/ }))?.text).toBe('1 open of 1')
-  expect((await row(alpha, '1'))?.text).toBe('[ ] 1. Alpha only')
-  expect(await alpha.find({ type: 'Text', text: /Beta only/ })).toBeUndefined()
-  await alpha.unmount()
-  expect((await run($, 'add Alpha again')).text).toBe('Added 2. Alpha again')
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('[ ] 1. One only (#1)')
 })
 
 test('a list saved by an earlier session is read back and opens the pane', async ($, on) => {
@@ -320,21 +320,94 @@ test('a shell cd during the session keeps the list where it was', async ($, on) 
   )
 })
 
-test('a /cd to another project follows it to that project\'s list', async ($, on) => {
+test('a /cd keeps the session\'s list', async ($, on) => {
   const { setProject } = stubEngine(on, '/work/alpha')
   await $.session.start(START)
-  await run($, 'add Alpha only')
+  await run($, 'add Alpha thing')
 
-  // /cd moves the session's root, with no new session.start.
   setProject('/work/beta')
-  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('The checklist is empty.')
-  expect((await run($, 'add Beta only')).text).toBe('Added 1. Beta only')
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await row(ui, '1'))?.text).toBe('[ ] 1. Beta only')
-  await ui.unmount()
+  expect((await run($, 'add Beta thing')).text).toBe('Added 2. Beta thing')
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe(
+    '[ ] 1. Alpha thing (#1)\n[ ] 2. Beta thing (#2)',
+  )
+})
 
-  setProject('/work/alpha')
-  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('[ ] 1. Alpha only (#1)')
+test('/clear carries the list over to the session it starts', async ($, on) => {
+  const { setSession } = stubEngine(on)
+  await $.session.start(START)
+  await run($, 'add Survives the clear')
+
+  // /clear ends the session and goes on under a new id, with no session.start.
+  await $.session.end({ reason: 'clear', sessionId: 'session-one', resume: { id: 'session-one' } })
+  setSession('session-cleared')
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('[ ] 1. Survives the clear (#1)')
+  expect((await run($, 'add After the clear')).text).toBe('Added 2. After the clear')
+
+  // The list moved: the old id no longer holds it.
+  setSession('session-one')
+  await $.session.start(START)
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('The checklist is empty.')
+})
+
+test('a switch to another session brings that session\'s list at the next prompt', async ($, on) => {
+  const { setSession } = stubEngine(on)
+  setSession('session-two')
+  await $.session.start(START)
+  await run($, 'add Two\'s item')
+  setSession('session-one')
+  await $.session.start(START)
+  await run($, 'add One\'s item')
+
+  // An in-terminal resume of session two: it ends one, and no session.start follows.
+  await $.session.end({ reason: 'resume', sessionId: 'session-one', resume: { id: 'session-one' } })
+  setSession('session-two')
+  await $.prompt.submit({ text: 'carry on' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /Two's item/ }))?.text).toContain("1. Two's item")
+  expect(await ui.find({ type: 'Text', text: /One's item/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a project\'s old list goes to the first session there, once', async ($, on) => {
+  const saved = { 'project:/work/alpha': { next: 2, items: [{ id: '1', title: 'From before', status: 'open' }] } }
+  const { setSession } = stubEngine(on, '/work/alpha', saved)
+  await $.session.start(START)
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('[ ] 1. From before (#1)')
+
+  setSession('session-two')
+  await $.session.start(START)
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('The checklist is empty.')
+})
+
+test('a list no session has touched for 90 days is let go', async ($, on) => {
+  const { setSession, passDays } = stubEngine(on)
+  await $.session.start(START)
+  await run($, 'add Old one')
+  setSession('session-two')
+  await $.session.start(START)
+  await run($, 'add Recent one')
+
+  passDays(60)
+  setSession('session-three')
+  await $.session.start(START)
+  await run($, 'add Newest one')
+  // Session two is touched again on day 60; session one is not.
+  setSession('session-two')
+  await $.session.start(START)
+  await run($, 'done 1')
+
+  passDays(31)
+  setSession('session-four')
+  await $.session.start(START)
+  for (const [id, list] of [
+    ['session-one', 'The checklist is empty.'],
+    ['session-two', '[x] 1. Recent one (#1)'],
+    ['session-three', '[ ] 1. Newest one (#1)'],
+  ]) {
+    setSession(id)
+    await $.session.start(START)
+    expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe(list)
+  }
 })
 
 test('/checklist version prints the version in the plugin\'s own manifest', async ($, on) => {

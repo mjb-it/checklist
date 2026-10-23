@@ -1,13 +1,18 @@
 # checklist
 
-A Claude Code pane beside the chat that lists a checklist for the project
+A Claude Code pane beside the chat that lists a checklist for the session
 you are in: each item has a number, a title, an optional one-line detail,
-and a status of open, done, or dropped. Every project (git root, or the
-session's directory outside one) keeps its own list in the plugin's store,
-so one repository never sees another's items. The project is worked out
-from where the session is rooted, so a `cd` in the shell mid-session keeps
-the same list; `/cd` moves to the new project's list. The pane opens by itself at
-session start only when the project already has items.
+and a status of open, done, or dropped. Every session keeps its own list in
+the plugin's store, so two sessions in the same directory never see or
+change each other's items. The list stays with its session: through a `cd`
+or a `/cd`, a plugin reload, and a `/clear`, which carries it over to the
+fresh conversation, and `claude --resume` brings it back. A list no session
+has touched for 90 days is deleted. The pane opens by itself at session
+start only when the session already has items.
+
+Lists from before 0.7.0 were kept per project: the first session to start
+in a project takes that project's list as its own, and later ones start
+empty.
 
 ## Requirements
 
@@ -71,7 +76,7 @@ the desktop app.
 
 The plugin registers a `checklist` tool the model can call, so you can say
 "add that to the checklist" or "mark 3 done" in the chat, and Claude can
-tick items off as it finishes them. It writes the same per-project list the
+tick items off as it finishes them. It writes the same session list the
 command and the pane use.
 
 Besides its number, each item has an id that only Claude sees (`#12`): it
@@ -94,8 +99,15 @@ The plugin is a mod: one hooks module, `hooks/register.tsx`, and nothing
 else runs. What it hooks, and what each hook touches:
 
 - **`session.start`** registers the `/checklist` command and the `checklist`
-  tool, reads this project's list from the plugin's own store, and opens the
-  pane when the list is not empty. It then passes the event on unchanged.
+  tool, reads this session's list from the plugin's own store, and opens the
+  pane when the list is not empty. It also deletes lists untouched for 90
+  days. It then passes the event on unchanged.
+- **`session.end`**: on a `/clear`, marks the list to move to the session id
+  the conversation goes on under. It changes nothing else, and passes the
+  event on unchanged.
+- **`prompt.submit`**: checks that the live list is this session's, in case
+  a `/clear` or a switch of session changed the session id. It reads the
+  prompt not at all, and passes it on unchanged.
 - **`command.run`**, matched to `command: "checklist"` only. It answers
   `/checklist` itself and never sees or changes any other command, whether a
   person typed it or another plugin ran it.
@@ -110,7 +122,7 @@ else runs. What it hooks, and what each hook touches:
   only: draws each as one line, and hands the expanded view (ctrl+o) and
   errors back to the engine. It draws nothing else.
 
-The plugin reads and writes only its own store, under one key per project,
+The plugin reads and writes only its own store, under one key per session,
 and its own state value; `/checklist version` also reads its own
 `.claude-plugin/plugin.json`. It makes no network requests and runs no
 processes.

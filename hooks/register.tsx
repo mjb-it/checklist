@@ -9,32 +9,60 @@ const TOOL = 'mcp__checklist__checklist'
 const USAGE =
   '/checklist [add <title> [-- detail] | done|open|drop <n> | edit <n> <title> | remove <n> | clear | close | version]'
 
-const list = atom({ plugin: 'checklist', key: 'list' } as const, { project: '', root: '', items: [] as Item[] })
+const list = atom({ plugin: 'checklist', key: 'list' } as const, { key: '', carry: false, items: [] as Item[] })
+
+/** A session's list not touched for this long is let go at the next session start. */
+const KEEP_MS = 90 * 24 * 60 * 60 * 1000
 
 const MARK: Record<Status, string> = { open: '[ ]', done: '[x]', dropped: '[-]' }
 const VERB: Partial<Record<string, Status>> = { done: 'done', open: 'open', drop: 'dropped' }
 
 /**
- * The key one project's list is stored under: its git root, else the session's root.
- * Worked out once per session root and kept, since `$.session.repo()` reads the
- * shell's directory and a `cd` there would move the list; a `/cd` moves the root.
+ * The key this session's list is stored under: its session id, so no other
+ * session sees it. The id changes under a running process on /clear, which
+ * carries the list over, and on a switch to another session, which brings
+ * that session's own; either way the live list follows here.
  */
-async function projectKey($: EngineInterface): Promise<string> {
-  const root = await $.session.root()
+async function sessionKey($: EngineInterface): Promise<string> {
+  const key = `session:${await $.session.id()}`
   const kept = await read($, list)
-  if (kept.project && kept.root === root) return kept.project
-  const repo = await $.session.repo()
-  const project = repo?.root ?? root
-  const data = await load($, project)
-  await update($, list, () => ({ project, root, items: data.items }))
-  return project
+  if (kept.key === key) return key
+  if (kept.key && kept.carry && (await $.store.get(key)) === undefined) {
+    await $.store.set(key, await $.store.get(kept.key))
+    await $.store.delete(kept.key)
+  }
+  const data = await load($, key)
+  await update($, list, () => ({ key, carry: false, items: data.items }))
+  return key
+}
+
+/**
+ * Lists were kept per project before they were kept per session: the first
+ * session to start in a project takes that project's list as its own, once.
+ */
+async function claimProjectList($: EngineInterface, key: string, now: number): Promise<void> {
+  if ((await $.store.get(key)) !== undefined) return
+  const project = `project:${(await $.session.repo())?.root ?? (await $.session.root())}`
+  const saved = await $.store.get(project)
+  if (saved === undefined) return
+  await $.store.set(key, { ...(saved as object), touched: now })
+  await $.store.delete(project)
+}
+
+/** Lets go of every list no session has touched for KEEP_MS. */
+async function prune($: EngineInterface, now: number): Promise<void> {
+  for (const key of await $.store.keys()) {
+    if (!key.startsWith('session:')) continue
+    const saved = (await $.store.get(key)) as { touched?: number } | undefined
+    if (now - (saved?.touched ?? 0) > KEEP_MS) await $.store.delete(key)
+  }
 }
 
 // A list saved before uids: each item's number was its id, and a removed one ([~]) stayed on the list.
 type Saved = { next?: number; items?: Array<Partial<Item> & { id?: string; status?: string }> }
 
-async function load($: EngineInterface, project: string): Promise<Project> {
-  const saved = (await $.store.get(`project:${project}`)) as Saved | undefined
+async function load($: EngineInterface, key: string): Promise<Project> {
+  const saved = (await $.store.get(key)) as Saved | undefined
   if (!saved || !Array.isArray(saved.items)) return { next: 1, items: [] }
   // An older list keeps each item's number as its uid and lets its removed items go.
   const items: Item[] = saved.items
@@ -44,10 +72,10 @@ async function load($: EngineInterface, project: string): Promise<Project> {
   return { next, items }
 }
 
-async function save($: EngineInterface, project: string, data: Project): Promise<void> {
-  await $.store.set(`project:${project}`, data)
-  // A click on a pane drawn before a /cd saves the project it shows, not the one now kept.
-  await update($, list, state => (state.project === project ? { ...state, items: data.items } : state))
+async function save($: EngineInterface, key: string, data: Project): Promise<void> {
+  await $.store.set(key, { ...data, touched: await $.clock.now() })
+  // A click on a pane drawn before the session changed saves the list it shows, not the one now kept.
+  await update($, list, state => (state.key === key ? { ...state, items: data.items } : state))
 }
 
 /**
@@ -63,7 +91,7 @@ const toggled = (status: Status): Status => (status === 'open' ? 'done' : 'open'
 /** Which item a change names: by position in the list now, or by uid. */
 type Ref = { position: number } | { uid: number }
 
-// One change to a project's list, as the command, the tool and a click ask for it.
+// One change to the session's list, as the command, the tool and a click ask for it.
 type Op =
   | { kind: 'add'; title: string; detail?: string }
   | { kind: 'status'; ref: Ref; status: Status }
@@ -73,8 +101,8 @@ type Op =
 
 type Outcome = { ok: boolean; text: string; items: Item[] }
 
-async function apply($: EngineInterface, project: string, op: Op, forModel = false): Promise<Outcome> {
-  const data = await load($, project)
+async function apply($: EngineInterface, key: string, op: Op, forModel = false): Promise<Outcome> {
+  const data = await load($, key)
   const fail = (text: string): Outcome => ({ ok: false, text, items: data.items })
   const at =
     'ref' in op
@@ -94,13 +122,13 @@ async function apply($: EngineInterface, project: string, op: Op, forModel = fal
       const detail = op.detail?.trim()
       const added: Item = { uid: data.next, title, status: 'open', ...(detail ? { detail } : {}) }
       const items = [...data.items, added]
-      await save($, project, { next: data.next + 1, items })
+      await save($, key, { next: data.next + 1, items })
       return { ok: true, text: `Added ${label(added, items.length, forModel)}`, items }
     }
     case 'status': {
       if (!item) return missing()
       const items = data.items.map(i => (i === item ? { ...i, status: op.status } : i))
-      await save($, project, { ...data, items })
+      await save($, key, { ...data, items })
       return { ok: true, text: `${named(item)} is now ${op.status}.`, items }
     }
     case 'edit': {
@@ -108,20 +136,20 @@ async function apply($: EngineInterface, project: string, op: Op, forModel = fal
       if (!item) return missing()
       if (!title) return fail('A title is needed.')
       const items = data.items.map(i => (i === item ? { ...i, title } : i))
-      await save($, project, { ...data, items })
+      await save($, key, { ...data, items })
       return { ok: true, text: `${named({ ...item, title })} (was: ${item.title})`, items }
     }
     case 'remove': {
       if (!item) return missing()
       // Gone from the list: the items after it move up a place, and keep their uids.
       const items = data.items.filter(i => i !== item)
-      await save($, project, { ...data, items })
+      await save($, key, { ...data, items })
       const moved = forModel && at < items.length ? '; the items after it moved up one place' : ''
       return { ok: true, text: `Removed ${named(item)}${moved}`, items }
     }
     case 'clear': {
       // Positions start again from 1; uids carry on, so an old one never names a new item.
-      await save($, project, { ...data, items: [] })
+      await save($, key, { ...data, items: [] })
       const removed = data.items.map((i, n) => label(i, n + 1, forModel))
       return {
         ok: true,
@@ -181,13 +209,13 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'checklist',
-      description: 'Per-project checklist pane: add, edit, done|open|drop, remove, clear, close, version',
+      description: "This session's checklist pane: add, edit, done|open|drop, remove, clear, close, version",
     })
     await $.tool.register({
       name: 'checklist',
       isDeferred: false,
       description:
-        "The project's checklist, shown in a pane beside the chat and kept per project across sessions. " +
+        "This session's checklist, shown in a pane beside the chat; other sessions have their own. " +
         'Use it to record tasks the user agrees on, mark them done as you finish them, or read what is open. ' +
         'The user sees items by position (1, 2, 3, with no gaps: a removed item is gone and the ones after it ' +
         'move up). You also see each item\'s id (#12), which never changes and is never reused. ' +
@@ -208,12 +236,28 @@ export const register: Register = on => {
         required: ['action'],
       },
     })
-    const project = await projectKey($)
-    const data = await load($, project)
-    await update($, list, state => ({ ...state, items: data.items }))
+    const now = await $.clock.now()
+    // Prune first: a list claimed from its project carries no touch time until it is stamped here.
+    await prune($, now)
+    const key = await sessionKey($)
+    await claimProjectList($, key, now)
+    const { items } = await load($, key)
+    await update($, list, state => ({ ...state, items }))
     // Open unasked only when there is something to show.
-    if (data.items.length > 0) void $.ui.open({ id: PANE, title: TITLE })
+    if (items.length > 0) void $.ui.open({ id: PANE, title: TITLE })
 
+    return next(e)
+  })
+
+  // /clear goes on under a new session id with no session.start: carry the list across to it.
+  on('session.end', async ($, e, next) => {
+    if (e.reason === 'clear') await update($, list, state => ({ ...state, carry: true }))
+    return next(e)
+  })
+
+  // Each prompt makes sure the live list is this session's, after a /clear or a switch of session.
+  on('prompt.submit', async ($, e, next) => {
+    await sessionKey($)
     return next(e)
   })
 
@@ -221,12 +265,12 @@ export const register: Register = on => {
     const action = String(e.action ?? '')
     const title = String(e.title ?? '')
     const detail = e.detail === undefined ? undefined : String(e.detail)
-    const project = await projectKey($)
+    const key = await sessionKey($)
     const status = VERB[action]
 
-    if (action === 'list') return { result: summary((await load($, project)).items) }
-    if (action === 'add') return answer(await apply($, project, { kind: 'add', title, detail }, true))
-    if (action === 'clear') return answer(await apply($, project, { kind: 'clear' }, true))
+    if (action === 'list') return { result: summary((await load($, key)).items) }
+    if (action === 'add') return answer(await apply($, key, { kind: 'add', title, detail }, true))
+    if (action === 'clear') return answer(await apply($, key, { kind: 'clear' }, true))
     if (!status && action !== 'edit' && action !== 'remove') return { deny: `Unknown action "${action}". ${USAGE}` }
 
     // Every other action names one item, by id or by position.
@@ -243,7 +287,7 @@ export const register: Register = on => {
       status ? { kind: 'status', ref, status }
       : action === 'edit' ? { kind: 'edit', ref, title }
       : { kind: 'remove', ref }
-    return answer(await apply($, project, op, true))
+    return answer(await apply($, key, op, true))
 
     function answer(out: Outcome) {
       if (!out.ok) return { deny: out.text }
@@ -290,7 +334,7 @@ export const register: Register = on => {
     }
     if (!op) return { text: USAGE }
 
-    const out = await apply($, await projectKey($), op)
+    const out = await apply($, await sessionKey($), op)
     if (!out.ok) return { text: USAGE }
     if (op.kind !== 'clear') await $.ui.open({ id: PANE, title: TITLE })
     return { text: out.text }
@@ -317,7 +361,7 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
-    const { project, items } = await read($, list)
+    const { key, items } = await read($, list)
     const wide = e.props.bodyColumns >= 56
     const open = items.filter(i => i.status === 'open').length
 
@@ -335,7 +379,7 @@ export const register: Register = on => {
                 dimColor={!isOpen}
                 // By uid: a click toggles the row it was drawn for, whatever has moved since.
                 onPress={() =>
-                  void apply($, project, { kind: 'status', ref: { uid: item.uid }, status: toggled(item.status) })
+                  void apply($, key, { kind: 'status', ref: { uid: item.uid }, status: toggled(item.status) })
                 }
               >
                 {MARK[item.status]}{' '}
