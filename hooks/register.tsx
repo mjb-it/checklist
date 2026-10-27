@@ -7,7 +7,7 @@ const PANE = 'checklist'
 const TITLE = 'Checklist'
 const TOOL = 'mcp__checklist__checklist'
 const USAGE =
-  '/checklist [add <title> [-- detail] | done|open|drop <n> | edit <n> <title> | remove <n> | clear | close | version]'
+  '/checklist [add <title> [-- detail] | done|open|drop <n> | edit <n> <title> | move <n> to <m> | remove <n> | clear | close | version]'
 
 const list = atom({ plugin: 'checklist', key: 'list' } as const, { key: '', carry: false, items: [] as Item[] })
 
@@ -96,6 +96,7 @@ type Op =
   | { kind: 'add'; title: string; detail?: string }
   | { kind: 'status'; ref: Ref; status: Status }
   | { kind: 'edit'; ref: Ref; title: string }
+  | { kind: 'move'; ref: Ref; to: number }
   | { kind: 'remove'; ref: Ref }
   | { kind: 'clear' }
 
@@ -138,6 +139,16 @@ async function apply($: EngineInterface, key: string, op: Op, forModel = false):
       const items = data.items.map(i => (i === item ? { ...i, title } : i))
       await save($, key, { ...data, items })
       return { ok: true, text: `${named({ ...item, title })} (was: ${item.title})`, items }
+    }
+    case 'move': {
+      if (!item) return missing()
+      if (op.to > data.items.length) return fail(`No position ${op.to}: the list has ${data.items.length}.`)
+      // It lands at the place asked for; the items between shift one place to make room.
+      const items = data.items.filter(i => i !== item)
+      items.splice(op.to - 1, 0, item)
+      if (op.to - 1 === at) return { ok: true, text: `${named(item)} is already there.`, items }
+      await save($, key, { ...data, items })
+      return { ok: true, text: `Moved ${label(item, op.to, forModel)} (was ${at + 1})`, items }
     }
     case 'remove': {
       if (!item) return missing()
@@ -183,7 +194,8 @@ function callLine(input: Record<string, unknown>, items: Item[]): string {
     : known ? ` "${known.title}"`
     : input.position !== undefined ? ` ${String(input.position)}`
     : ''
-  return `Checklist · ${String(input.action ?? '')}${which}`
+  const to = input.to === undefined ? '' : ` to ${String(input.to)}`
+  return `Checklist · ${String(input.action ?? '')}${which}${to}`
 }
 
 /**
@@ -209,7 +221,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'checklist',
-      description: "This session's checklist pane: add, edit, done|open|drop, remove, clear, close, version",
+      description: "This session's checklist pane: add, edit, move, done|open|drop, remove, clear, close, version",
     })
     await $.tool.register({
       name: 'checklist',
@@ -222,14 +234,15 @@ export const register: Register = on => {
         'Name an item by id when you are tracking it yourself; by position when you repeat a number the user ' +
         'gave, since a position is read against the list as it stands now, which is what the user sees. ' +
         'Actions: list; add (title, optional detail); done, open, drop, remove (id or position); ' +
-        'edit (id or position, title); clear. A change answers with the one item it touched; list answers with ' +
+        'edit (id or position, title); move (id or position, to: the new position); clear. A change answers with the one item it touched; list answers with ' +
         'every item, one per line: [ ] open, [x] done or [-] dropped, then position, title, (#id) and any detail.',
       inputSchema: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['list', 'add', 'done', 'open', 'drop', 'edit', 'remove', 'clear'] },
+          action: { type: 'string', enum: ['list', 'add', 'done', 'open', 'drop', 'edit', 'move', 'remove', 'clear'] },
           id: { type: 'string', description: "The item's id, as #12 or 12; give this or position" },
           position: { type: 'integer', minimum: 1, description: "The item's place in the list now, from 1" },
+          to: { type: 'integer', minimum: 1, description: 'The place to move the item to, for move' },
           title: { type: 'string', description: 'The title, for add and edit' },
           detail: { type: 'string', description: 'One line of detail, for add' },
         },
@@ -271,7 +284,7 @@ export const register: Register = on => {
     if (action === 'list') return { result: summary((await load($, key)).items) }
     if (action === 'add') return answer(await apply($, key, { kind: 'add', title, detail }, true))
     if (action === 'clear') return answer(await apply($, key, { kind: 'clear' }, true))
-    if (!status && action !== 'edit' && action !== 'remove') return { deny: `Unknown action "${action}". ${USAGE}` }
+    if (!status && action !== 'edit' && action !== 'move' && action !== 'remove') return { deny: `Unknown action "${action}". ${USAGE}` }
 
     // Every other action names one item, by id or by position.
     const hasId = e.id !== undefined && e.id !== ''
@@ -283,9 +296,16 @@ export const register: Register = on => {
     if (hasPosition && position === undefined) return { deny: `"${String(e.position)}" is no position: 1 or more.` }
     const ref: Ref = uid !== undefined ? { uid } : { position: position! }
 
+    let to: number | undefined
+    if (action === 'move') {
+      to = e.to === undefined || e.to === '' ? undefined : positionOf(e.to)
+      if (to === undefined) return { deny: `"${String(e.to ?? '')}" is no place to move to: a position, 1 or more.` }
+    }
+
     const op: Op =
       status ? { kind: 'status', ref, status }
       : action === 'edit' ? { kind: 'edit', ref, title }
+      : action === 'move' ? { kind: 'move', ref, to: to! }
       : { kind: 'remove', ref }
     return answer(await apply($, key, op, true))
 
@@ -327,6 +347,11 @@ export const register: Register = on => {
       op = { kind: 'status', ref, status }
     } else if (verb === 'edit' && ref && rest.length >= 2) {
       op = { kind: 'edit', ref, title: rest.slice(1).join(' ') }
+    } else if (verb === 'move' && ref) {
+      // `move 4 to 2`, or `move 4 2`.
+      const [, ...tail] = rest
+      const to = tail.length === 2 && tail[0] === 'to' ? positionOf(tail[1]) : tail.length === 1 ? positionOf(tail[0]) : undefined
+      if (to !== undefined) op = { kind: 'move', ref, to }
     } else if (verb === 'remove' && ref && rest.length === 1) {
       op = { kind: 'remove', ref }
     } else if (verb === 'clear' && rest.length === 0) {

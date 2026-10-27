@@ -53,6 +53,7 @@ At the prompt:
 /checklist open <n>                     mark item n open      [ ]
 /checklist drop <n>                     mark item n dropped   [-]
 /checklist edit <n> <title>             retitle item n
+/checklist move <n> to <m>              move item n to position m; the ones between shift
 /checklist remove <n>                   delete item n; the ones after it move up
 /checklist clear                        delete every item; reports what it removed
 /checklist close                        close the pane
@@ -85,7 +86,7 @@ item survives the numbers moving. Claude names an item by id when it is
 tracking it, and by position when it repeats a number you gave; a position
 is read against the list as it is at that moment, which is the list you
 see. The tool takes an `action` (`list`, `add`, `done`, `open`, `drop`,
-`edit`, `remove`, `clear`) with `id` or `position`, `title` and `detail` as
+`edit`, `move`, `remove`, `clear`) with `id` or `position`, `to`, `title` and `detail` as
 the action needs. A change answers with the one item it touched
 (`3. Ship it (#12) is now done.`); `list` answers with every item.
 

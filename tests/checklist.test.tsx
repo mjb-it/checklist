@@ -519,3 +519,27 @@ test('a list saved with removed items lets them go and closes the gaps', async (
   expect((await run($, 'add Next')).text).toBe('Added 3. Next')
   expect((await $.tool.call({ tool: TOOL, action: 'done', id: '#5' })).result).toBe('3. Next (#5) is now done.')
 })
+
+test('move puts an item at a new position and shifts the ones between', async ($, on) => {
+  stubEngine(on)
+  await $.session.start(START)
+  for (const title of ['One', 'Two', 'Three', 'Four']) await run($, `add ${title}`)
+  const titles = async () =>
+    ((await $.tool.call({ tool: TOOL, action: 'list' })).result as string).split('\n').map(l => l.replace(/^\[.\] \d+\. | \(#\d+\)$/g, ''))
+
+  expect((await run($, 'move 4 to 2')).text).toBe('Moved 2. Four (was 4)')
+  expect(await titles()).toEqual(['One', 'Four', 'Two', 'Three'])
+  expect((await run($, 'move 1 3')).text).toBe('Moved 3. One (was 1)')
+  expect(await titles()).toEqual(['Four', 'Two', 'One', 'Three'])
+  expect((await run($, 'move 2 to 2')).text).toBe('2. Two is already there.')
+
+  // Claude names the item by id; its uid stays with it.
+  expect((await $.tool.call({ tool: TOOL, action: 'move', id: '#1', to: 4 })).result).toBe('Moved 4. One (#1) (was 3)')
+  expect(await titles()).toEqual(['Four', 'Two', 'Three', 'One'])
+
+  for (const bad of ['move', 'move 1', 'move 1 to', 'move 1 to 9', 'move 9 to 1', 'move 1 to 0', 'move 1 into 2', 'move 1 to 2 3'])
+    expect((await run($, bad)).text).toContain('/checklist [add <title>')
+  expect(await titles()).toEqual(['Four', 'Two', 'Three', 'One'])
+  expect((await $.tool.call({ tool: TOOL, action: 'move', position: 1 })).deny).toContain('no place to move to')
+  expect((await $.tool.call({ tool: TOOL, action: 'move', position: 1, to: 9 })).deny).toBe('No position 9: the list has 4.')
+})
