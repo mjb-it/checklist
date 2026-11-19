@@ -40,15 +40,21 @@ function stubEngine(on: On, initial = '/work/alpha', saved?: Record<string, unkn
   // The engine's own drawing of a site, where a hook hands it on.
   on('ui.render', () => ({ type: 'Text', children: ['engine'] }))
   const opened: string[] = []
+  const up = new Set<string>()
   on('ui.open', (_, e) => {
     opened.push(e.id)
+    up.add(e.id)
     return { value: { isPlaced: true } }
   })
   const closed: string[] = []
   on('ui.close', (_, e) => {
     closed.push(e.id)
+    up.delete(e.id)
     return { value: undefined }
   })
+  on('ui.panes', () => ({
+    value: [...up].map(id => ({ id, title: 'Checklist', isShown: true, isFocused: false, isPlaced: true })),
+  }))
   return {
     opened,
     closed,
@@ -73,7 +79,7 @@ test('the pane shows the header, marks, and details when wide', async ($, on) =>
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
-    expect((await ui.find({ type: 'Text', text: /open of/ }))?.text).toBe('1 open of 3')
+    expect((await ui.find({ type: 'Text', text: /open of/ }))?.text).toBe('▸ main · 1 open of 3')
     expect((await row(ui, '1'))?.text).toBe('[ ] 1. Write the README')
     expect((await row(ui, '2'))?.text).toBe('[x] 2. Ship it')
     expect((await row(ui, '3'))?.text).toBe('[-] 3. Weigh the cost')
@@ -103,13 +109,13 @@ test('a click on a row toggles it between open and done', async ($, on) => {
   // A dropped item comes back to open.
   await ui.press({ key: 'item:2' })
   expect((await row(ui, '2'))?.text).toBe('[ ] 2. Dropped one')
-  expect((await ui.find({ type: 'Text', text: /open of/ }))?.text).toBe('2 open of 2')
+  expect((await ui.find({ type: 'Text', text: /open of/ }))?.text).toBe('▸ main · 2 open of 2')
   await ui.unmount()
 
   // The click reached the store: a new session reads it back.
   await $.session.start(START)
   const again = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await again.find({ type: 'Text', text: /open of/ }))?.text).toBe('2 open of 2')
+  expect((await again.find({ type: 'Text', text: /open of/ }))?.text).toBe('▸ main · 2 open of 2')
   await again.unmount()
 
   // After the first is removed, a click still toggles the row it was drawn for, now first.
@@ -142,7 +148,7 @@ test('/checklist close closes the pane', async ($, on) => {
   const ran = await run($, 'close')
   expect(ran.text).toBe('Checklist pane closed. /checklist reopens it.')
   expect(closed).toEqual(['checklist'])
-  expect((await run($, 'close now')).text).toContain('/checklist [add <title>')
+  expect((await run($, 'close now')).text).toContain('/checklist [@list]')
 })
 
 test('each command changes the list and reports what it did', async ($, on) => {
@@ -160,7 +166,7 @@ test('each command changes the list and reports what it did', async ($, on) => {
   // A removed item is gone and the rest move up: the numbers never skip.
   expect((await run($, 'add Third thing')).text).toBe('Added 2. Third thing')
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /open of/ }))?.text).toBe('1 open of 2')
+  expect((await ui.find({ type: 'Text', text: /open of/ }))?.text).toBe('▸ main · 1 open of 2')
   expect(await ui.find({ type: 'Text', text: /First thing/ })).toBeUndefined()
   // Rows are keyed by uid; their numbers are positions.
   expect((await row(ui, '2'))?.text).toBe('[-] 1. Second thing, renamed')
@@ -168,7 +174,7 @@ test('each command changes the list and reports what it did', async ($, on) => {
   await ui.unmount()
   // Claude reads the uids beside the positions.
   expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe(
-    '[-] 1. Second thing, renamed (#2) -- with a detail\n[ ] 2. Third thing (#3)',
+    '{main} (current)\n[-] 1. Second thing, renamed (#2) -- with a detail\n[ ] 2. Third thing (#3)',
   )
 
   expect((await run($, 'clear')).text).toBe('Cleared 2 items: 1. Second thing, renamed; 2. Third thing')
@@ -182,7 +188,7 @@ test('unknown input prints one line of usage', async ($, on) => {
 
   for (const bad of ['frobnicate', 'done', 'done 9', 'done 0', 'done x', 'done #1', 'done 1 2', 'edit 1', 'remove', 'add', 'clear now']) {
     const ran = await run($, bad)
-    expect(ran.text).toContain('/checklist [add <title>')
+    expect(ran.text).toContain('/checklist [@list]')
     expect(ran.text.split('\n').length).toBe(1)
   }
 })
@@ -200,7 +206,7 @@ test('the model manages the list through the checklist tool', async ($, on) => {
   expect((await $.tool.call({ tool: TOOL, action: 'edit', id: '1', title: 'Renamed' })).result).toBe(
     '1. Renamed (#1) (was: From the model)',
   )
-  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('[x] 1. Renamed (#1) -- agreed in chat')
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('{main} (current)\n[x] 1. Renamed (#1) -- agreed in chat')
 
   // What the person typed and what the model did share one list.
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
@@ -263,7 +269,7 @@ test('each session keeps its own list, even in the same project', async ($, on) 
   // Resuming the first session brings back its list, untouched by the second.
   setSession('session-one')
   await $.session.start(START)
-  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('[ ] 1. One only (#1)')
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('{main} (current)\n[ ] 1. One only (#1)')
 })
 
 test('a list saved by an earlier session is read back and opens the pane', async ($, on) => {
@@ -282,7 +288,7 @@ test('a list saved by an earlier session is read back and opens the pane', async
 
   // Saved before uids: each item's number becomes its uid, and the gap closes.
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /open of/ }))?.text).toBe('1 open of 2')
+  expect((await ui.find({ type: 'Text', text: /open of/ }))?.text).toBe('▸ main · 1 open of 2')
   expect((await row(ui, '3'))?.text).toBe('[x] 2. Kept done')
   expect((await ui.find({ type: 'Text', text: /from last time/ }))?.text).toContain('from last time')
   await ui.unmount()
@@ -290,7 +296,7 @@ test('a list saved by an earlier session is read back and opens the pane', async
   // The new item goes last, and its uid carries on from the saved one.
   expect((await run($, 'add New this session')).text).toBe('Added 3. New this session')
   expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe(
-    '[ ] 1. Kept open (#1) -- from last time\n[x] 2. Kept done (#3)\n[ ] 3. New this session (#4)',
+    '{main} (current)\n[ ] 1. Kept open (#1) -- from last time\n[x] 2. Kept done (#3)\n[ ] 3. New this session (#4)',
   )
 })
 
@@ -305,10 +311,10 @@ test('a shell cd during the session keeps the list where it was', async ($, on) 
   // Into another repository: still the same list.
   setShellDir('/work/beta')
   expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe(
-    '[ ] 1. Before the cd (#1)\n[ ] 2. After leaving (#2)',
+    '{main} (current)\n[ ] 1. Before the cd (#1)\n[ ] 2. After leaving (#2)',
   )
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /open of/ }))?.text).toBe('2 open of 2')
+  expect((await ui.find({ type: 'Text', text: /open of/ }))?.text).toBe('▸ main · 2 open of 2')
   await ui.press({ key: 'item:1' })
   expect((await row(ui, '1'))?.text).toBe('[x] 1. Before the cd')
   await ui.unmount()
@@ -316,7 +322,7 @@ test('a shell cd during the session keeps the list where it was', async ($, on) 
   // A reload runs session.start again from the moved shell: the list stays put.
   await $.session.start(START)
   expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe(
-    '[x] 1. Before the cd (#1)\n[ ] 2. After leaving (#2)',
+    '{main} (current)\n[x] 1. Before the cd (#1)\n[ ] 2. After leaving (#2)',
   )
 })
 
@@ -328,7 +334,7 @@ test('a /cd keeps the session\'s list', async ($, on) => {
   setProject('/work/beta')
   expect((await run($, 'add Beta thing')).text).toBe('Added 2. Beta thing')
   expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe(
-    '[ ] 1. Alpha thing (#1)\n[ ] 2. Beta thing (#2)',
+    '{main} (current)\n[ ] 1. Alpha thing (#1)\n[ ] 2. Beta thing (#2)',
   )
 })
 
@@ -340,7 +346,7 @@ test('/clear carries the list over to the session it starts', async ($, on) => {
   // /clear ends the session and goes on under a new id, with no session.start.
   await $.session.end({ reason: 'clear', sessionId: 'session-one', resume: { id: 'session-one' } })
   setSession('session-cleared')
-  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('[ ] 1. Survives the clear (#1)')
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('{main} (current)\n[ ] 1. Survives the clear (#1)')
   expect((await run($, 'add After the clear')).text).toBe('Added 2. After the clear')
 
   // The list moved: the old id no longer holds it.
@@ -372,7 +378,7 @@ test('a project\'s old list goes to the first session there, once', async ($, on
   const saved = { 'project:/work/alpha': { next: 2, items: [{ id: '1', title: 'From before', status: 'open' }] } }
   const { setSession } = stubEngine(on, '/work/alpha', saved)
   await $.session.start(START)
-  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('[ ] 1. From before (#1)')
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('{main} (current)\n[ ] 1. From before (#1)')
 
   setSession('session-two')
   await $.session.start(START)
@@ -401,8 +407,8 @@ test('a list no session has touched for 90 days is let go', async ($, on) => {
   await $.session.start(START)
   for (const [id, list] of [
     ['session-one', 'The checklist is empty.'],
-    ['session-two', '[x] 1. Recent one (#1)'],
-    ['session-three', '[ ] 1. Newest one (#1)'],
+    ['session-two', '{main} (current)\n[x] 1. Recent one (#1)'],
+    ['session-three', '{main} (current)\n[ ] 1. Newest one (#1)'],
   ]) {
     setSession(id)
     await $.session.start(START)
@@ -422,7 +428,7 @@ test('/checklist version prints the version in the plugin\'s own manifest', asyn
   expect((await run($, 'version')).text).toBe('checklist 9.8.7')
   expect(read).toHaveLength(1)
   expect(read[0]).toEndWith('/.claude-plugin/plugin.json')
-  expect((await run($, 'version now')).text).toContain('/checklist [add <title>')
+  expect((await run($, 'version now')).text).toContain('/checklist [@list]')
 })
 
 const toolRow = (input: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
@@ -515,7 +521,7 @@ test('a list saved with removed items lets them go and closes the gaps', async (
   stubEngine(on, '/work/alpha', saved)
   await $.session.start(START)
 
-  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('[x] 1. Kept (#1)\n[ ] 2. Real item (#4)')
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('{main} (current)\n[x] 1. Kept (#1)\n[ ] 2. Real item (#4)')
   expect((await run($, 'add Next')).text).toBe('Added 3. Next')
   expect((await $.tool.call({ tool: TOOL, action: 'done', id: '#5' })).result).toBe('3. Next (#5) is now done.')
 })
@@ -525,7 +531,7 @@ test('move puts an item at a new position and shifts the ones between', async ($
   await $.session.start(START)
   for (const title of ['One', 'Two', 'Three', 'Four']) await run($, `add ${title}`)
   const titles = async () =>
-    ((await $.tool.call({ tool: TOOL, action: 'list' })).result as string).split('\n').map(l => l.replace(/^\[.\] \d+\. | \(#\d+\)$/g, ''))
+    ((await $.tool.call({ tool: TOOL, action: 'list' })).result as string).split('\n').filter(l => !l.startsWith('{')).map(l => l.replace(/^\[.\] \d+\. | \(#\d+\)$/g, ''))
 
   expect((await run($, 'move 4 to 2')).text).toBe('Moved 2. Four (was 4)')
   expect(await titles()).toEqual(['One', 'Four', 'Two', 'Three'])
@@ -538,8 +544,153 @@ test('move puts an item at a new position and shifts the ones between', async ($
   expect(await titles()).toEqual(['Four', 'Two', 'Three', 'One'])
 
   for (const bad of ['move', 'move 1', 'move 1 to', 'move 1 to 9', 'move 9 to 1', 'move 1 to 0', 'move 1 into 2', 'move 1 to 2 3'])
-    expect((await run($, bad)).text).toContain('/checklist [add <title>')
+    expect((await run($, bad)).text).toContain('/checklist [@list]')
   expect(await titles()).toEqual(['Four', 'Two', 'Three', 'One'])
-  expect((await $.tool.call({ tool: TOOL, action: 'move', position: 1 })).deny).toContain('no place to move to')
+  expect((await $.tool.call({ tool: TOOL, action: 'move', position: 1 })).deny).toContain('Say where to move it')
   expect((await $.tool.call({ tool: TOOL, action: 'move', position: 1, to: 9 })).deny).toBe('No position 9: the list has 4.')
+})
+
+/** The to-do and chores lists from the design notes, built through the tool. */
+async function twoLists($: any) {
+  for (const title of ['Back up the laptop', 'Try the new ramen place', 'Learn three chords on the ukulele'])
+    await $.tool.call({ tool: TOOL, action: 'add', title, list: 'to-do' })
+  for (const title of ['Water the office plants', 'Play with legos', 'Vacuum the living room', 'Do the dishes'])
+    await $.tool.call({ tool: TOOL, action: 'add', title, list: 'chores' })
+}
+const titlesOf = async ($: any, list: string) =>
+  ((await $.tool.call({ tool: TOOL, action: 'list', list })).result as string)
+    .split('\n')
+    .slice(1)
+    .map(l => l.replace(/^\[.\] \d+\. | \(#\d+\)$/g, ''))
+
+test('a session holds named lists, each numbered from 1', async ($, on) => {
+  stubEngine(on)
+  await $.session.start(START)
+  await twoLists($)
+
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe(
+    '{to-do}\n[ ] 1. Back up the laptop (#1)\n[ ] 2. Try the new ramen place (#2)\n[ ] 3. Learn three chords on the ukulele (#3)\n\n' +
+      '{chores} (current)\n[ ] 1. Water the office plants (#4)\n[ ] 2. Play with legos (#5)\n[ ] 3. Vacuum the living room (#6)\n[ ] 4. Do the dishes (#7)',
+  )
+  // "Show me my chores list": just that list, and it is current.
+  expect((await $.tool.call({ tool: TOOL, action: 'list', list: 'Chores' })).result).toStartWith('{chores} (current)\n[ ] 1. Water')
+
+  // The pane draws both, the current one marked.
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Button', key: 'list:chores' }))?.text).toBe('▸ chores · 4 open of 4')
+  expect((await ui.find({ type: 'Button', key: 'list:to-do' }))?.text).toBe('  to-do · 3 open of 3')
+  expect((await row(ui, '5'))?.text).toBe('[ ] 2. Play with legos')
+  // A click on a heading makes that list current.
+  await ui.press({ key: 'list:to-do' })
+  expect((await ui.find({ type: 'Button', key: 'list:to-do' }))?.text).toBe('▸ to-do · 3 open of 3')
+  await ui.unmount()
+
+  // A bare position now means the current list, with the list named in the answer.
+  expect((await $.tool.call({ tool: TOOL, action: 'done', position: 2 })).result).toBe('to-do 2. Try the new ramen place (#2) is now done.')
+})
+
+test('move sends an item to the end of another list, or to a place in it', async ($, on) => {
+  stubEngine(on)
+  await $.session.start(START)
+  await twoLists($)
+
+  // Looking at chores: "move 2 to my to-do list".
+  expect((await $.tool.call({ tool: TOOL, action: 'move', position: 2, list: 'chores', into: 'to-do' })).result).toBe(
+    'Moved to-do 4. Play with legos (#5) (was chores 2)',
+  )
+  expect(await titlesOf($, 'to-do')).toEqual(['Back up the laptop', 'Try the new ramen place', 'Learn three chords on the ukulele', 'Play with legos'])
+  expect(await titlesOf($, 'chores')).toEqual(['Water the office plants', 'Vacuum the living room', 'Do the dishes'])
+
+  // "Move the legos item to number 1 on my to-do list": by its id, to a place in that list.
+  await $.tool.call({ tool: TOOL, action: 'move', id: '#5', into: 'chores', to: 2 })
+  expect((await $.tool.call({ tool: TOOL, action: 'move', id: '#5', into: 'to-do', to: 1 })).result).toBe(
+    'Moved to-do 1. Play with legos (#5) (was chores 2)',
+  )
+  expect(await titlesOf($, 'to-do')).toEqual(['Play with legos', 'Back up the laptop', 'Try the new ramen place', 'Learn three chords on the ukulele'])
+  expect((await $.tool.call({ tool: TOOL, action: 'move', id: '#5', into: 'chores', to: 9 })).deny).toBe('No position 9: chores has 3.')
+
+  // The person types it: `move <n> to @list [m]`.
+  expect((await run($, '@chores move 1 to @to-do')).text).toBe('Moved to-do 5. Water the office plants (was chores 1)')
+  expect((await run($, '@to-do move 5 @chores 1')).text).toBe('Moved chores 1. Water the office plants (was to-do 5)')
+  // Moving to a name with no list yet makes it.
+  expect((await run($, '@chores move 1 to @garden')).text).toBe('Moved garden 1. Water the office plants (was chores 1)')
+  expect((await $.tool.call({ tool: TOOL, action: 'list', list: 'garden' })).result).toBe('{garden} (current)\n[ ] 1. Water the office plants (#4)')
+})
+
+test('a list left empty is deleted', async ($, on) => {
+  stubEngine(on)
+  await $.session.start(START)
+  await $.tool.call({ tool: TOOL, action: 'add', title: 'Only chore', list: 'chores' })
+  await $.tool.call({ tool: TOOL, action: 'add', title: 'Only to-do', list: 'to-do' })
+
+  // Its last item moves out: chores goes, and to-do is the one list left.
+  await $.tool.call({ tool: TOOL, action: 'move', id: '#1', into: 'to-do' })
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('{to-do} (current)\n[ ] 1. Only to-do (#2)\n[ ] 2. Only chore (#1)')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Button', key: 'list:chores' })).toBeUndefined()
+  await ui.unmount()
+
+  // Clear deletes the list; a new add starts a fresh one.
+  expect((await run($, 'clear')).text).toBe('Cleared 2 items: 1. Only to-do; 2. Only chore')
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('The checklist is empty.')
+  expect((await $.tool.call({ tool: TOOL, action: 'list', list: 'to-do' })).deny).toBe('The checklist is empty.')
+  expect((await run($, 'add Fresh start')).text).toBe('Added 1. Fresh start')
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('{main} (current)\n[ ] 1. Fresh start (#3)')
+})
+
+test('with several lists and the pane closed, a bare position asks which list', async ($, on) => {
+  stubEngine(on)
+  await $.session.start(START)
+  await twoLists($)
+  await run($, 'close')
+
+  const asked = await $.tool.call({ tool: TOOL, action: 'done', position: 2 })
+  expect(asked.deny).toStartWith('Which list: to-do, chores? The pane is closed')
+  expect((await $.tool.call({ tool: TOOL, action: 'add', title: 'Somewhere' })).deny).toStartWith('Which list')
+  expect((await run($, 'done 2')).text).toBe('Which list: to-do, chores? Name it first, as /checklist @to-do done 2')
+  // Nothing changed.
+  expect(await titlesOf($, 'chores')).toEqual(['Water the office plants', 'Play with legos', 'Vacuum the living room', 'Do the dishes'])
+
+  // Named, or by id, it goes ahead.
+  await run($, 'close')
+  expect((await run($, '@chores done 2')).text).toBe('chores 2. Play with legos is now done.')
+  await run($, 'close')
+  expect((await $.tool.call({ tool: TOOL, action: 'open', id: '#5' })).result).toBe('chores 2. Play with legos (#5) is now open.')
+
+  // A list that does not exist is named back with the ones that do.
+  expect((await $.tool.call({ tool: TOOL, action: 'done', position: 1, list: 'garden' })).deny).toBe('No list "garden". The lists: to-do, chores.')
+  expect((await run($, '@garden')).text).toBe('No list "garden". The lists: to-do, chores.')
+  expect((await run($, '@to-do')).text).toBe('to-do is the current list.')
+})
+
+test('a session saved with one unnamed list reads it back as main', async ($, on) => {
+  const saved = { 'session:session-one': { touched: Date.UTC(2026, 9, 23), next: 3, items: [{ uid: 1, title: 'Old item', status: 'open' }, { uid: 2, title: 'Done item', status: 'done' }] } }
+  stubEngine(on, '/work/alpha', saved)
+  await $.session.start(START)
+  expect((await $.tool.call({ tool: TOOL, action: 'list' })).result).toBe('{main} (current)\n[ ] 1. Old item (#1)\n[x] 2. Done item (#2)')
+  expect((await $.tool.call({ tool: TOOL, action: 'add', title: 'Elsewhere', list: 'other' })).result).toBe('Added other 1. Elsewhere (#3)')
+})
+
+test('a call or answer naming lists is drawn as one short line', async ($, on) => {
+  stubEngine(on)
+  await $.session.start(START)
+  for (const [input, line] of [
+    [{ action: 'list', list: 'chores' }, 'Checklist · list chores'],
+    [{ action: 'done', position: 2, list: 'chores' }, 'Checklist · done 2 in chores'],
+    [{ action: 'move', position: 2, into: 'to-do' }, 'Checklist · move 2 to to-do'],
+    [{ action: 'move', position: 2, into: 'to-do', to: 1 }, 'Checklist · move 2 to to-do 1'],
+  ] as const) {
+    const ui = await $.ui.mount(toolRow(input))
+    expect(await textOf(ui)).toBe(line)
+    await ui.unmount()
+  }
+  for (const [output, line] of [
+    ['{chores} (current)\n[ ] 1. A (#1)\n[x] 2. B (#2)', 'chores: 2 items, 1 open'],
+    ['{a}\n[ ] 1. A (#1)\n\n{b} (current)\n[ ] 1. B (#2)', '2 items, 2 open, in 2 lists'],
+    ['Moved to-do 4. Play with legos (#5) (was chores 2)', 'Moved to-do 4. Play with legos (was chores 2)'],
+  ] as const) {
+    const ui = await $.ui.mount(resultBlock(output))
+    expect(await textOf(ui)).toBe(line)
+    await ui.unmount()
+  }
 })

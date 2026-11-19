@@ -1,7 +1,7 @@
 {
   "name": "checklist",
-  "version": "0.8.0",
-  "description": "A per-session checklist pane beside the chat; /checklist adds, edits, and marks items open, done, or dropped",
+  "version": "0.9.0",
+  "description": "A per-session pane of named checklists beside the chat; /checklist adds, edits, moves between lists, and marks items open, done, or dropped",
   "license": "MIT",
   "author": {
     "name": "matt"

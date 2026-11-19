@@ -1,8 +1,9 @@
 # checklist
 
-A Claude Code pane beside the chat that lists a checklist for the session
-you are in: each item has a number, a title, an optional one-line detail,
-and a status of open, done, or dropped. Every session keeps its own list in
+A Claude Code pane beside the chat that holds the checklists for the
+session you are in: one or more named lists (say `to-do` and `chores`),
+where each item has a number, a title, an optional one-line detail, and a
+status of open, done, or dropped. Every session keeps its own lists in
 the plugin's store, so two sessions in the same directory never see or
 change each other's items. The list stays with its session: through a `cd`
 or a `/cd`, a plugin reload, and a `/clear`, which carries it over to the
@@ -48,47 +49,75 @@ At the prompt:
 
 ```
 /checklist                              open the pane
+/checklist @<list>                      make that list current
 /checklist add <title> [-- detail]      add an item at the end
 /checklist done <n>                     mark item n done      [x]
 /checklist open <n>                     mark item n open      [ ]
 /checklist drop <n>                     mark item n dropped   [-]
 /checklist edit <n> <title>             retitle item n
 /checklist move <n> to <m>              move item n to position m; the ones between shift
+/checklist move <n> to @<list> [<m>]    move item n to another list, last or at position m
 /checklist remove <n>                   delete item n; the ones after it move up
-/checklist clear                        delete every item; reports what it removed
+/checklist clear                        delete the list; reports what it removed
 /checklist close                        close the pane
 /checklist version                      print the installed plugin's version
 ```
 
 Anything else prints one line of usage.
 
-An item's number is its place in the list, so the numbers always run 1, 2,
-3 with no gaps: removing one moves the items after it up a place.
+### Named lists
 
-The pane shows a header like `3 open of 10`, then every item in order: open
-items bold, done items dim, dropped items struck through. The detail shows
-on a dim second line when the pane is at least 56 columns wide.
+A session can hold several lists, each with a name of letters, digits, `-`
+and `_` (`Chores` and `chores` are the same list). One of them is the
+**current** list: a bare number, an `add` or a `clear` acts on it. Put
+`@<list>` first to act on another list instead, which also makes it
+current: `/checklist @chores done 2`, `/checklist @to-do add Call the vet`.
 
-A click on a row toggles it: an open item becomes done, a done or dropped
-item becomes open. Clicks reach the pane in the fullscreen terminal and in
-the desktop app.
+A list is made the first time something is added or moved to its name, and
+deleted once it is empty, so there are no blank headings. A session with no
+lists yet adds to one called `main`. Lists saved before 0.9.0 come back as
+`main`.
+
+When there are several lists and the pane is closed, you cannot see which
+list is current, so a bare number is not acted on: the command (or Claude)
+asks which list you mean first.
+
+An item's number is its place in its list, so the numbers always run 1, 2,
+3 with no gaps: removing or moving one out moves the items after it up a
+place.
+
+The pane shows each list under a heading like `▸ chores · 3 open of 10`:
+the current list's heading is bold with a `▸`, the others are dim. Under
+each heading come its items in order: open items bold, done items dim,
+dropped items struck through. The detail shows on a dim second line when
+the pane is at least 56 columns wide.
+
+A click on a heading makes that list current. A click on a row toggles it:
+an open item becomes done, a done or dropped item becomes open. Clicks
+reach the pane in the fullscreen terminal and in the desktop app.
 
 ## The Claude session can use it too
 
 The plugin registers a `checklist` tool the model can call, so you can say
 "add that to the checklist" or "mark 3 done" in the chat, and Claude can
-tick items off as it finishes them. It writes the same session list the
-command and the pane use.
+tick items off as it finishes them. It writes the same session lists the
+command and the pane use, so "show me my chores list" or "move 2 to my
+to-do list" work in the chat.
 
 Besides its number, each item has an id that only Claude sees (`#12`): it
-never changes and is never given to another item, so Claude's hold on an
+is unique across all the session's lists, never changes and is never given
+to another item, so Claude's hold on an
 item survives the numbers moving. Claude names an item by id when it is
 tracking it, and by position when it repeats a number you gave; a position
 is read against the list as it is at that moment, which is the list you
 see. The tool takes an `action` (`list`, `add`, `done`, `open`, `drop`,
-`edit`, `move`, `remove`, `clear`) with `id` or `position`, `to`, `title` and `detail` as
-the action needs. A change answers with the one item it touched
-(`3. Ship it (#12) is now done.`); `list` answers with every item.
+`edit`, `move`, `remove`, `clear`) with `id` or `position`, `list`, `to`,
+`into`, `title` and `detail` as the action needs. `list` names the list to
+act on and makes it current; `into` is the list a `move` sends the item to.
+A change answers with the one item it touched (`3. Ship it (#12) is now
+done.`, or `chores 3. Ship it (#12) is now done.` once there are several
+lists); `list` answers with every list, or just the one named, each under a
+`{name}` line.
 
 In the transcript each of those calls is one line, like `Checklist · done 3`,
 with one line of result (`3. Ship it is now done.`, or `4 items, 2 open` for
@@ -100,8 +129,8 @@ The plugin is a mod: one hooks module, `hooks/register.tsx`, and nothing
 else runs. What it hooks, and what each hook touches:
 
 - **`session.start`** registers the `/checklist` command and the `checklist`
-  tool, reads this session's list from the plugin's own store, and opens the
-  pane when the list is not empty. It also deletes lists untouched for 90
+  tool, reads this session's lists from the plugin's own store, and opens the
+  pane when there is at least one. It also deletes lists untouched for 90
   days. It then passes the event on unchanged.
 - **`session.end`**: on a `/clear`, marks the list to move to the session id
   the conversation goes on under. It changes nothing else, and passes the
